@@ -53,7 +53,7 @@ jobs:
             build-essential make autoconf m4 zip unzip file \
             clang-18 lld-18 llvm-18 libclang-18-dev cmake xz-utils git curl \
             libfontconfig1-dev libx11-dev libxext-dev libxrender-dev \
-            libxi-dev libxtst-dev
+            libxrandr-dev libxi-dev libxtst-dev libxt-dev
           clang-18 --version | head -1
           autoconf --version | head -1
 

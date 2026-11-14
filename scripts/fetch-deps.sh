@@ -87,26 +87,27 @@ fi
 # (libawt/fontconfigmanager.c) rely on the sysroot's implicit /usr/include
 # search path.  This mirrors the layout the JBR 21 device build was verified
 # with.
-if [ -f "$ANDROID_SYSROOT/usr/include/fontconfig/fontconfig.h" ]; then
-  info "NDK sysroot already provides fontconfig headers"
-else
-  missing=()
-  mkdir -p "$ANDROID_SYSROOT/usr/include"
-  for d in fontconfig X11; do
-    if [ -d "/usr/include/$d" ]; then
-      cp -a "/usr/include/$d" "$ANDROID_SYSROOT/usr/include/"
-    else
-      missing+=("$d")
-    fi
-  done
-  if [ "${#missing[@]}" -gt 0 ]; then
-    die "missing host header trees: ${missing[*]}
+# Refresh on every run: a cached sysroot may contain a partial X11 tree from an
+# earlier (incomplete) package set.  Host headers win when present; a sysroot
+# that already has them (e.g. a manually augmented local NDK) is left alone.
+missing=()
+mkdir -p "$ANDROID_SYSROOT/usr/include"
+for d in fontconfig X11; do
+  if [ -d "/usr/include/$d" ]; then
+    rm -rf "$ANDROID_SYSROOT/usr/include/$d"
+    cp -a "/usr/include/$d" "$ANDROID_SYSROOT/usr/include/"
+  elif [ ! -d "$ANDROID_SYSROOT/usr/include/$d" ]; then
+    missing+=("$d")
+  fi
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  die "missing host header trees: ${missing[*]}
   install them first, e.g. on Debian/Ubuntu:
     sudo apt-get install libfontconfig1-dev libx11-dev libxext-dev \
-                         libxrender-dev libxi-dev libxtst-dev"
-  fi
-  info "copied fontconfig/X11 headers into the NDK sysroot"
+                         libxrender-dev libxrandr-dev libxi-dev libxtst-dev \
+                         libxt-dev"
 fi
+info "fontconfig/X11 headers synced into the NDK sysroot"
 
 # --- termux-elf-cleaner (built by setup-toolchain.sh) ---------------------
 if [ ! -d "$WORK/termux-elf-cleaner/.git" ]; then
