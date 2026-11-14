@@ -292,9 +292,10 @@ Ubuntu 的 `llvm-18` 包只安装带版本号的二进制（`llvm-ar-18`、`llvm
 **Q: 能否用 x86_64 主机构建？**
 工具链设计与宿主架构无关（NDK sysroot + 宿主 clang），`fetch-deps.sh` 会按
 `uname -m` 选 Temurin 的 x64 资产。`.github/workflows/build-hosted.yml` 就是
-在 GitHub 托管的 ubuntu-24.04（x86_64）上跑完整构建；`build-full.yml` 保留
-自托管 arm64 的路径。实测 JBR 25 全程 **18 分钟**（4 vCPU，含依赖下载），依赖走
-`actions/cache`；x86_64 宿主不需要删任何预装组件（runner 有 100+ GB 可用）。
+在 GitHub 托管的 ubuntu-24.04（x86_64）上跑完整构建（两条 line 都验证过，
+见 README 的 CI 表）；`build-full.yml` 保留自托管 arm64 的路径。实测（4 vCPU、冷缓存、含依赖下载到 artifact 上传）：**JBR 21 = 11 分钟**
+（PCH 开启）、**JBR 25 = 18–25 分钟**（PCH 关闭，并行构建时更慢）；依赖走
+`actions/cache`。x86_64 宿主不需要删任何预装组件（runner 有 100+ GB 可用）。
 
 x86_64 宿主和 aarch64 宿主有两处行为差异，脚本都已处理：
 

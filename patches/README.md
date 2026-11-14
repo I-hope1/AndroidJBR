@@ -27,6 +27,10 @@ patches/
 > 它们，干净 clone 打补丁后链接 `libjava.so` 会报 `undefined symbol: posix_spawn`。
 > 现在的补丁为 49 文件（44 修改 + 5 新增），sha256
 > `440300c1fa410738c40832355bcb78ae8dd9f1935a0342b5fc609abbdd1c74a4`。
+> 已用**干净 clone + `scripts/build.sh --jbr 21`** 在 GitHub 托管 runner 上完整
+> 构建通过（run
+> [43582356196](https://github.com/I-hope1/AndroidJBR/actions/runs/43582356196)），
+> 产物文件清单与真机验证过的 r3 包完全一致。
 （21.0.11）的完整移植 diff，`git apply` 可干净应用：
 
 ```

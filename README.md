@@ -19,8 +19,8 @@ with JetBrains' enhanced class redefinition intact.
 
 | JBR line | 上游 pin | 状态 | 产物 |
 |---|---|---|---|
-| **21** | `jbr21` @ `015db36d`（21.0.11） | ✅ 已构建 + **真机验证**（见下） | [Release v21.0.11-r3](https://github.com/I-hope1/AndroidJBR/releases/tag/v21.0.11-r3) |
-| **25** | `jbr25` @ `1b5d5af9`（25.0.5.0.3） | ⚠️ **实验性**：✅ 已构建成功（24 分钟/2 vCPU），⏳ 未真机验证 | [Release v25.0.5-r1](https://github.com/I-hope1/AndroidJBR/releases/tag/v25.0.5-r1) |
+| **21** | `jbr21` @ `015db36d`（21.0.11） | ✅ 已构建 + **真机验证** + CI 可复现构建（托管 runner 11 分钟） | [Release v21.0.11-r3](https://github.com/I-hope1/AndroidJBR/releases/tag/v21.0.11-r3) |
+| **25** | `jbr25` @ `1b5d5af9`（25.0.5.0.3） | ⚠️ **实验性**：✅ 已构建（本地 24 分钟 / CI 25 分钟），⏳ 未真机验证 | [Release v25.0.5-r1](https://github.com/I-hope1/AndroidJBR/releases/tag/v25.0.5-r1) |
 
 选择 line：
 
@@ -134,12 +134,14 @@ BOOT_JDK=/opt/jdk-21.0.13+9 \
 | workflow | 触发 | 内容 |
 |---|---|---|
 | `ci.yml` | push / PR | 两条 line 的补丁校验（~15s）+ shellcheck + 脚本 fail-fast |
-| `build-hosted.yml` | 手动 dispatch | **GitHub 托管 runner（ubuntu-24.04 / x86_64）完整构建**，产物作为 artifact 上传。JBR 25 已验证：✅ 2026-11-14，run [43579547510](https://github.com/I-hope1/AndroidJBR/actions/runs/43579547510)，18 分钟，artifact 30 MB |
+| `build-hosted.yml` | 手动 dispatch | **GitHub 托管 runner（ubuntu-24.04 / x86_64）完整构建**，产物作为 artifact 上传。两条 line 均已验证：JBR 21 ✅ 11 分钟（run [43582356196](https://github.com/I-hope1/AndroidJBR/actions/runs/43582356196)）、JBR 25 ✅ 25 分钟（run [43582363094](https://github.com/I-hope1/AndroidJBR/actions/runs/43582363094)），artifact 约 29–30 MB |
 | `build-full.yml` | 手动 dispatch | 自托管 arm64 runner 完整构建（需要自备 runner） |
 
-托管构建实测：JBR 25 从冷启动到上传 artifact 共 **18 分钟**（4 vCPU、含 NDK /
-Temurin / freetype 下载与全部编译）；JBR 21 在 2 vCPU 上约 1 小时，托管 runner
-上更短。依赖（NDK / Temurin / freetype / elf-cleaner / 头文件）走 `actions/cache`。
+托管构建实测（4 vCPU、冷缓存、含依赖下载与全部编译到 artifact 上传）：
+**JBR 21 = 11 分钟**（PCH 默认开启）、**JBR 25 = 18–25 分钟**（PCH 关闭，
+且与另一条 line 并行时更慢）。依赖（NDK / Temurin / freetype / elf-cleaner /
+头文件）走 `actions/cache`。CI 构建产物与 Release 包文件清单一致，字节不同属正常
+（宿主编译器/路径差异）。
 CI 产物与本地发布的 tar.xz **字节不同但结构一致**（宿主编译器/路径差异；
 `release` 里 `JAVA_RUNTIME_VERSION` 带构建机名后缀），校验方式同 `docs/DEVICE-TEST.md`。
 
