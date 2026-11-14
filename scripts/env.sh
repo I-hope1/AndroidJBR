@@ -124,6 +124,9 @@ export NDK=${NDK:-$WORK/android-ndk-r${NDK_VERSION}}
 # too — this is intentional, not a typo.
 export NDK_PREBUILT=${NDK_PREBUILT:-$NDK/toolchains/llvm/prebuilt/linux-x86_64}
 export ANDROID_SYSROOT=${ANDROID_SYSROOT:-$NDK_PREBUILT/sysroot}
+# NDK sysroot has no fontconfig/X11 headers; fetch-deps.sh assembles the header
+# subtrees from the host distro here and 03-configure.sh points -I at it.
+export SYSROOT_EXTRA=${SYSROOT_EXTRA:-$WORK/sysroot-extra}
 export BOOT_JDK=${BOOT_JDK:-$WORK/jdk-${BOOT_JDK_VERSION}}
 
 export FREETYPE_SRC=${FREETYPE_SRC:-$WORK/freetype-${FREETYPE_VERSION}}

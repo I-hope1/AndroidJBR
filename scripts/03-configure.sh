@@ -44,6 +44,21 @@ extra_ldflags="-L$DUMMY_LIBS -Wl,--undefined-version"
 GNU_BUILD_PLATFORM=$(sh "$JBR_SRC/make/autoconf/build-aux/config.guess" 2>/dev/null || true)
 [ -n "$GNU_BUILD_PLATFORM" ] || die "cannot determine host platform via config.guess"
 
+# fontconfig/X11 headers are not in the NDK sysroot: prefer the extra include
+# tree assembled by fetch-deps.sh, fall back to an augmented sysroot.
+if [ -f "$SYSROOT_EXTRA/include/fontconfig/fontconfig.h" ]; then
+  FONTCONFIG_INCLUDE=$SYSROOT_EXTRA/include
+else
+  FONTCONFIG_INCLUDE=$ANDROID_SYSROOT/usr/include
+fi
+if [ -d "$SYSROOT_EXTRA/include/X11" ]; then
+  X_INCLUDE=$SYSROOT_EXTRA/include/X11
+elif [ -d "$ANDROID_SYSROOT/usr/include/X11" ]; then
+  X_INCLUDE=$ANDROID_SYSROOT/usr/include/X11
+else
+  X_INCLUDE=$SYSROOT_EXTRA/include/X11
+fi
+
 pch_args=()
 case "${PRECOMPILED_HEADERS:-auto}" in
   disabled) pch_args=(--disable-precompiled-headers) ;;
@@ -84,8 +99,8 @@ rm -rf "$JBR_SRC/build"
     --with-freetype-include="$FREETYPE_PREFIX/include/freetype2" \
     --with-freetype-lib="$FREETYPE_PREFIX/lib" \
     --with-cups-include="$CUPS_SRC" \
-    --with-fontconfig-include="$ANDROID_SYSROOT/usr/include" \
-    --x-includes="$ANDROID_SYSROOT/usr/include/X11" \
+    --with-fontconfig-include="$FONTCONFIG_INCLUDE" \
+    --x-includes="$X_INCLUDE" \
     --x-libraries=/usr/lib \
     "${pch_args[@]}" \
     > "$CONFIGURE_LOG" 2>&1

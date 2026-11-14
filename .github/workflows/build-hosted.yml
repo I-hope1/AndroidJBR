@@ -46,20 +46,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Free disk space
-        # The runner starts with ~14 GB free; the JDK build tree alone needs
-        # ~2 GB and an unpacked NDK another ~2 GB.
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          df -h /
-
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             build-essential make autoconf m4 zip unzip file \
-            clang-18 lld-18 llvm-18 libclang-18-dev cmake xz-utils git curl
+            clang-18 lld-18 llvm-18 libclang-18-dev cmake xz-utils git curl \
+            libfontconfig1-dev libx11-dev libxext-dev libxrender-dev \
+            libxi-dev libxtst-dev
           clang-18 --version | head -1
           autoconf --version | head -1
 

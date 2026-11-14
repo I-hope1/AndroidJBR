@@ -75,6 +75,34 @@ if [ ! -d "$POJAV_BUILD/.git" ]; then
 fi
 [ -d "$POJAV_BUILD/jre_override/lib" ] || die "jre_override missing under $POJAV_BUILD"
 
+# --- bionic sysroot extras: fontconfig / X11 headers -----------------------
+# The NDK sysroot does not ship fontconfig or X11 headers.  java.desktop's
+# configure/build needs fontconfig even in headless builds (libfontmanager),
+# and the JBR21 X11 checks need the X11 header tree.  Copy only those header
+# subtrees out of the host distro into $SYSROOT_EXTRA/include so host glibc
+# headers never leak into the bionic build; 03-configure.sh points
+# --with-fontconfig-include / --x-includes at it.
+if [ -f "$ANDROID_SYSROOT/usr/include/fontconfig/fontconfig.h" ]; then
+  info "NDK sysroot already provides fontconfig headers"
+else
+  missing=()
+  for d in fontconfig X11; do
+    if [ -d "/usr/include/$d" ]; then
+      mkdir -p "$SYSROOT_EXTRA/include"
+      cp -a "/usr/include/$d" "$SYSROOT_EXTRA/include/"
+    else
+      missing+=("$d")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    die "missing host header trees: ${missing[*]}
+  install them first, e.g. on Debian/Ubuntu:
+    sudo apt-get install libfontconfig1-dev libx11-dev libxext-dev \
+                         libxrender-dev libxi-dev libxtst-dev"
+  fi
+  info "sysroot extras assembled in $SYSROOT_EXTRA/include"
+fi
+
 # --- termux-elf-cleaner (built by setup-toolchain.sh) ---------------------
 if [ ! -d "$WORK/termux-elf-cleaner/.git" ]; then
   need_cmd git
