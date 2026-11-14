@@ -20,10 +20,17 @@ patches/
 ## jbr21（已验证）
 
 对 `JetBrains/JetBrainsRuntime` **`jbr21` @ `015db36dcaaf5fd670735a10b74dd413b190a40d`**
+
+> 注意：2026-11-14 修正过一版。早先的 44 文件版本漏了 5 个**新增**
+> 源码文件（`libtinyiconv/iconv.cpp`、`libjava/posix_spawn.c/h`、
+> `os_cpu/linux_{arm,x86}/fpu_control.h`），而补丁修改过的 `Lib.gmk` 会引用
+> 它们，干净 clone 打补丁后链接 `libjava.so` 会报 `undefined symbol: posix_spawn`。
+> 现在的补丁为 49 文件（44 修改 + 5 新增），sha256
+> `440300c1fa410738c40832355bcb78ae8dd9f1935a0342b5fc609abbdd1c74a4`。
 （21.0.11）的完整移植 diff，`git apply` 可干净应用：
 
 ```
- 44 files changed, 978 insertions(+), 80 deletions(-)
+ 49 files changed, 1784 insertions(+), 80 deletions(-)   # 44 modified + 5 added
 ```
 
 来源层次：
