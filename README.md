@@ -1,5 +1,8 @@
 # AndroidJBR
 
+[![CI](https://github.com/I-hope1/AndroidJBR/actions/workflows/ci.yml/badge.svg)](https://github.com/I-hope1/AndroidJBR/actions/workflows/ci.yml)
+[![Full build](https://github.com/I-hope1/AndroidJBR/actions/workflows/build-hosted.yml/badge.svg)](https://github.com/I-hope1/AndroidJBR/actions/workflows/build-hosted.yml)
+
 **JetBrains Runtime for Android arm64 — patches plus reproducible build scripts.**
 
 把 [JetBrainsRuntime](https://github.com/JetBrains/JetBrainsRuntime) 交叉编译到
