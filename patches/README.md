@@ -53,11 +53,13 @@ patches/
 `git apply` 可干净应用：
 
 ```
- 53 files changed, 1766 insertions(+), 100 deletions(-)   # 48 modified + 5 added
+ 55 files changed, 1774 insertions(+), 103 deletions(-)   # 50 modified + 5 added
 ```
 
-状态：**补丁级验证通过（CI 矩阵），未构建、未真机验证**。补丁 sha256
-`6e054d098a997391956e04c4d0df99f5fb0ce82fcb316fb317349f85a458a167`。
+状态：**已构建成功**（2026-11-14，`make images` 1423 秒 / 2 vCPU），**未真机验证**。
+补丁 sha256 `26026f21fc286ca29ffb94eab2b996b42673e962d81a76b7774fa33baa957980`；
+构建中额外修正了 `dictionary.hpp` 的 DCEVM 内联函数（JDK 25 只前向声明
+`InstanceKlass`，改为在 `dictionary.cpp` 里 out-of-line 定义）。
 
 | 层 | 来源 |
 |---|---|
@@ -66,10 +68,16 @@ patches/
 | 冲突处理 | 6 个冲突 hunk（4 个文件；基底文件是两段补丁拼接，`libraries.m4` 各自拒一次）手工解决：`make/autoconf/libraries.m4`、`make/modules/java.desktop/lib/ClientLibraries.gmk`、`src/hotspot/os/linux/os_linux.cpp`、`src/java.desktop/unix/native/libawt/awt/awt_LoadLibrary.c` |
 | AndroidJBR 修复集 | 从 jbr21 补丁逐条移植（headless classlist、headless 下 `libfontmanager_xawt.so`、`os.cpp` bionic tag/临时目录/MTE、UTF-8 codeset、`ifaddrs`、`jvm_path`/`fork_and_exec`/`processor_id`、`net_util_md.h`、`awt_LoadLibrary.c`、评审修复） |
 | 与 JDK 21 的结构差异 | `make/hotspot/lib/JvmMapfile.gmk` 在 25 中已移除；`make/modules/java.desktop/lib/Awt2dLibraries.gmk` 拆分为 `AwtLibraries.gmk` / `ClientLibraries.gmk` 等——补丁按新布局适配，未回填已删除文件 |
+| 构建期修复（2026-11-14） | `dictionary.hpp`/`dictionary.cpp`：DCEVM `old_if_redefining()` 在 JDK 25 头文件里只剩前向声明，改为 out-of-line 定义 |
 
 构建注意：JBR 25 需要 Temurin **25.0.5+8** 作 boot JDK（`fetch-deps.sh` 会按
-line 自动选版本）。configure flag 与 21 相同（已核对 `--with-jvm-features` 名字在
-25 中仍有效），但**尚未实际跑过**；失败时按 `docs/BUILD.md` 第 9 节排查。
+line 自动选版本）。configure flag 与 21 相同，但有三处 line 专属差异（见
+`scripts/env.sh` / `scripts/03-configure.sh`）：
+
+1. `make JOBS=N`（JDK 25 拒绝 `make -jN`）；
+2. 显式传 `--build=<host config.guess>` 强制交叉编译，否则 adlc 等 build tool
+   会被编成 bionic 二进制；
+3. `PRECOMPILED_HEADERS=disabled`（clang 不能直接用 JDK 25 预期的 gcc 式 `.gch`）。
 
 ---
 

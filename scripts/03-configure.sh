@@ -35,6 +35,23 @@ done < "$PATCH_SERIES"
 extra_cflags="-DLE_STANDALONE -O3 -DANDROID -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
 extra_ldflags="-L$DUMMY_LIBS -Wl,--undefined-version"
 
+# The port keeps OPENJDK_TARGET_OS=linux, so a target of *-linux-android is not
+# enough for configure to notice it is cross-compiling: it compares the
+# autoconf build/host names.  Pass --build explicitly (the host's config.guess)
+# so BUILD_CC/BUILD_CXX are detected as host compilers and the build tools
+# (adlc, ...) are native.  Without this, JDK 25 builds adlc for bionic and the
+# build dies with "cannot execute: required file not found".
+GNU_BUILD_PLATFORM=$(sh "$JBR_SRC/make/autoconf/build-aux/config.guess" 2>/dev/null || true)
+[ -n "$GNU_BUILD_PLATFORM" ] || die "cannot determine host platform via config.guess"
+
+pch_args=()
+case "${PRECOMPILED_HEADERS:-auto}" in
+  disabled) pch_args=(--disable-precompiled-headers) ;;
+  enabled)  pch_args=(--enable-precompiled-headers) ;;
+  auto)     ;;
+  *)        die "PRECOMPILED_HEADERS must be auto, enabled or disabled" ;;
+esac
+
 info "configuring JBR $JBR_LINE (target $ANDROID_TARGET$ANDROID_API, headless, server VM)"
 rm -rf "$JBR_SRC/build"
 (
@@ -49,6 +66,7 @@ rm -rf "$JBR_SRC/build"
   STRIP="$HOST_STRIP" \
   bash configure \
     --openjdk-target="$ANDROID_TARGET" \
+    --build="$GNU_BUILD_PLATFORM" \
     --with-boot-jdk="$BOOT_JDK" \
     --with-build-jdk="$BOOT_JDK" \
     --with-toolchain-type=gcc \
@@ -69,6 +87,7 @@ rm -rf "$JBR_SRC/build"
     --with-fontconfig-include="$ANDROID_SYSROOT/usr/include" \
     --x-includes="$ANDROID_SYSROOT/usr/include/X11" \
     --x-libraries=/usr/lib \
+    "${pch_args[@]}" \
     > "$CONFIGURE_LOG" 2>&1
 ) || {
   tail -n 40 "$CONFIGURE_LOG" >&2
@@ -77,9 +96,9 @@ rm -rf "$JBR_SRC/build"
 
 # --- post-conditions ---------------------------------------------------------
 need_file "$BUILD_DIR/spec.gmk" "configure did not produce the expected build dir $BUILD_DIR"
-jvm_variant=$(grep -E '^JVM_VARIANTS :=' "$BUILD_DIR/spec.gmk" | head -1 | awk '{print $3}')
+jvm_variant=$(grep -E '^JVM_VARIANTS[[:space:]]*:=' "$BUILD_DIR/spec.gmk" | head -1 | awk -F':=' '{print $2}' | xargs)
 [ "$jvm_variant" = "$JVM_VARIANTS" ] || die "unexpected JVM_VARIANTS in spec: $jvm_variant"
-grep -q '^BOOT_JDK:=' "$BUILD_DIR/spec.gmk" || die "spec.gmk has no BOOT_JDK"
+grep -qE '^BOOT_JDK[[:space:]]*:=' "$BUILD_DIR/spec.gmk" || die "spec.gmk has no BOOT_JDK"
 
 info "configure OK"
 info "  build dir : $BUILD_DIR"

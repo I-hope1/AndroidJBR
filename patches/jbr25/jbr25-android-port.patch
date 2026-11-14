@@ -1507,6 +1507,39 @@ index 5a84cfef7..85a18daf9 100644
  #endif
  
  #ifdef AMD64
+diff --git a/src/hotspot/share/classfile/dictionary.cpp b/src/hotspot/share/classfile/dictionary.cpp
+index 1a3565496..7618bda6e 100644
+--- a/src/hotspot/share/classfile/dictionary.cpp
++++ b/src/hotspot/share/classfile/dictionary.cpp
+@@ -35,6 +35,11 @@
+ #include "utilities/ostream.hpp"
+ #include "utilities/tableStatistics.hpp"
+ 
++// (DCEVM) return old class if redefining in AllowEnhancedClassRedefinition, otherwise return "k"
++InstanceKlass* Dictionary::old_if_redefining(InstanceKlass* k) {
++  return (k != nullptr && k->is_redefining()) ? ((InstanceKlass*) k->old_version()) : k;
++}
++
+ // 2^24 is max size, like StringTable.
+ const size_t END_SIZE = 24;
+ // If a chain gets to 100 something might be wrong
+diff --git a/src/hotspot/share/classfile/dictionary.hpp b/src/hotspot/share/classfile/dictionary.hpp
+index fc6b14323..bf495c173 100644
+--- a/src/hotspot/share/classfile/dictionary.hpp
++++ b/src/hotspot/share/classfile/dictionary.hpp
+@@ -82,9 +82,9 @@ class Dictionary : public CHeapObj<mtClass> {
+   void rollback_redefinition();
+ private:
+   // (DCEVM) return old class if redefining in AllowEnhancedClassRedefinition, otherwise return "k"
+-  static InstanceKlass* old_if_redefining(InstanceKlass* k) {
+-    return (k != nullptr && k->is_redefining()) ? ((InstanceKlass* )k->old_version()) : k;
+-  }
++  // Defined out-of-line in dictionary.cpp: JDK 25's dictionary.hpp only
++  // forward-declares InstanceKlass, so an in-class body cannot access members.
++  static InstanceKlass* old_if_redefining(InstanceKlass* k);
+ };
+ 
+ #endif // SHARE_CLASSFILE_DICTIONARY_HPP
 diff --git a/src/hotspot/share/runtime/os.cpp b/src/hotspot/share/runtime/os.cpp
 index 462c3a407..199790293 100644
 --- a/src/hotspot/share/runtime/os.cpp

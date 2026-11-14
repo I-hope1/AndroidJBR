@@ -31,7 +31,8 @@ start=$(date +%s)
   # user environment leaking into the build.
   env -u CFLAGS -u CXXFLAGS -u LDFLAGS \
     ANDROID_BUILD=1 \
-    make -j"$JOBS" "${target_args[@]}"
+    # OpenJDK's build system refuses `make -j`; it derives parallelism from JOBS.
+    make JOBS="$JOBS" "${target_args[@]}"
 ) > "$BUILD_LOG" 2>&1 || {
   warn "build failed after $(( $(date +%s) - start ))s"
   tail -n 60 "$BUILD_LOG" >&2

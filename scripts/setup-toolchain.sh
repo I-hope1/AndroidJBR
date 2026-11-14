@@ -17,7 +17,6 @@ source "$_script_dir/lib.sh"
 
 need_cmd make
 require_jbr_line
-need_cmd cmake "needed to build termux-elf-cleaner"
 need_cmd sha256sum
 
 print_summary
@@ -85,6 +84,7 @@ fi
 if [ -x "$ELFC" ]; then
   info "elf-cleaner already built: $ELFC"
 else
+  need_cmd cmake "needed to build termux-elf-cleaner"
   need_dir "$WORK/termux-elf-cleaner" "run fetch-deps.sh first"
   info "building termux-elf-cleaner"
   (

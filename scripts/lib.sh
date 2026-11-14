@@ -118,6 +118,7 @@ if [ "\$1" = "--version" ]; then
   exit 0
 fi
 export LD_LIBRARY_PATH="$LLVM_LIB\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+export PATH="$LLVM_BIN\${LLD_BIN:+:\$LLD_BIN}:\$PATH"
 exec "$HOST_CLANG" \\
   --target="\${ANDROID_TARGET:-aarch64-linux-android}\${ANDROID_API:-21}" \\
   --sysroot="$ANDROID_SYSROOT" \\
@@ -135,10 +136,11 @@ if [ "\$1" = "--version" ]; then
   exit 0
 fi
 export LD_LIBRARY_PATH="$LLVM_LIB\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+export PATH="$LLVM_BIN\${LLD_BIN:+:\$LLD_BIN}:\$PATH"
 args=("\${@/-fno-var-tracking-assignments/}")
 link=1
 for a in "\${args[@]}"; do
-  case "\$a" in -c|-E|-S|-M|-MM) link=0 ;; esac
+  case "\$a" in -c|-E|-S|-M|-MM|c++-header) link=0 ;; esac
 done
 # NDK's static libc++abi references the LLVM unwinder; it must come last.
 if [ "\$link" = "1" ]; then args+=(-lunwind); fi

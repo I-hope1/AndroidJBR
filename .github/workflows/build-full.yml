@@ -1,10 +1,11 @@
 name: Full build (self-hosted arm64)
 
-# A complete cross-build is ~1 h on 2 vCPU and needs ~4 GB of downloaded
-# toolchains plus several GB of build output, so it is not run on GitHub-hosted
-# runners.  Trigger it manually on a self-hosted aarch64 Linux runner that has
-# the dependencies from docs/BUILD.md (clang-18, lld-18, llvm-18, make,
-# autoconf, cmake, git, curl, xz, zip, unzip, file).
+# Self-hosted arm64 variant.  For a build on GitHub-hosted runners (x86_64),
+# use build-hosted.yml instead — it installs deps via apt and caches them.
+#
+# Trigger this manually on a self-hosted aarch64 Linux runner that has the
+# dependencies from docs/BUILD.md (clang-18, lld-18, llvm-18, make, autoconf,
+# cmake, git, curl, xz, zip, unzip, file).
 #
 # The runner needs a label set matching: [self-hosted, linux, arm64]
 # (adjust `runs-on` below if your runner uses different labels).

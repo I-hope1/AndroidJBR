@@ -14,7 +14,7 @@
 | JBR_LINE | branch @ pin | boot JDK | 补丁目录 | 状态 |
 |---|---|---|---|---|
 | `21`（默认） | `jbr21` @ `015db36d` | Temurin 21.0.13+9 | `patches/jbr21/` | 已构建 + 真机验证 |
-| `25` | `jbr25` @ `1b5d5af9` | Temurin 25.0.5+8 | `patches/jbr25/` | 实验性：仅补丁级验证 |
+| `25` | `jbr25` @ `1b5d5af9` | Temurin 25.0.5+8 | `patches/jbr25/` | 已构建成功（2026-11-14）；真机未验证 |
 
 ```bash
 ./scripts/build.sh            # JBR 21
@@ -174,12 +174,20 @@ bash configure \
 | `--with-fontconfig-include`/`--x-includes` | 都指向 NDK sysroot；**不要**指向宿主 `/usr/include`，否则会把 glibc 头带进来 |
 | `--with-freetype-*` | 必须用交叉编译出来的 freetype（`file` 显示 ARM aarch64），宿主 freetype 会链接失败 |
 
-> JBR 25 注意：上面这组 flag 在 JBR 25 上**未经构建验证**。JDK 25 的
-> `--with-jvm-features` 仍然接受 `dtrace/zero/vm-structs/epsilongc/zgc/shenandoahgc/jvmci`
-> 这组名字（已核对 `make/hotspot/lib/JvmFeatures.gmk`），但 `make/modules/java.desktop`
-> 的库布局已重构（`Awt2dLibraries.gmk` 拆成 `AwtLibraries.gmk` / `ClientLibraries.gmk` 等，
-> `JvmMapfile.gmk` 被移除），补丁已按新布局适配；实际 configure/make 结果需在
-> aarch64 主机上验证。
+> JBR 25 实测（2026-11-14，aarch64 / 2 vCPU，`make images` 1423 秒）：上面这组 flag
+> 可用，但需要三处 line 专属调整，脚本已处理：
+>
+> 1. **`make JOBS=N`**：JDK 25 的构建系统拒绝 `make -jN`（报 `'make -jN' is not supported`）；
+> 2. **显式 `--build=<host config.guess>`**：端口补丁让 `TARGET_OS` 保持 `linux`，JDK 25
+>    因此把 Android 目标当成 native 编译，adlc 等 build tool 被编成 bionic 二进制
+>    （`cannot execute: required file not found`）。传 `--build` 后 `COMPILE_TYPE=cross`，
+>    build tool 用宿主编译器（`BUILD_CC`）；
+> 3. **`PRECOMPILED_HEADERS=disabled`**：JDK 25 的 PCH 依赖 gcc 式 `.gch` 查找，clang
+>    需要头文件与 `.gch` 同目录，直接开 PCH 会报 `precompiled.hpp file not found`。
+>
+> 另外 JDK 25 的 `dictionary.hpp` 只前向声明 `InstanceKlass`，JBR 的 DCEVM 内联函数
+> `old_if_redefining()` 在类内定义会编译失败；补丁已改为在 `dictionary.cpp` 里
+> out-of-line 定义。
 
 configure 成功后产物目录固定为：
 
@@ -269,8 +277,28 @@ JBR pin 与补丁必须成对存在。检查 `JBR_PIN` 是否被改动；先用
 
 **Q: 能否用 x86_64 主机构建？**
 工具链设计与宿主架构无关（NDK sysroot + 宿主 clang），`fetch-deps.sh` 会按
-`uname -m` 选 Temurin 的 x64 资产。但本仓库**未在 x86_64 上端到端验证过**，
-按 README 的"已验证"口径，真机产物来自 aarch64 宿主。
+`uname -m` 选 Temurin 的 x64 资产。`.github/workflows/build-hosted.yml` 就是
+在 GitHub 托管的 ubuntu-24.04（x86_64）上跑完整构建；`build-full.yml` 保留
+自托管 arm64 的路径。
+
+**Q: 无 root 环境用解包的 autoconf，configure 报找不到 autom4te / m4sugar？**
+deb 解包的 autoconf 内部路径仍指向 `/usr/share/autoconf`、`/usr/bin/autom4te`。
+需要显式重定向（原构建环境就是这样做的）：
+
+```bash
+export AUTOM4TE=/path/to/usr/bin/autom4te
+export M4=/path/to/usr/bin/m4
+export autom4te_perllibdir=/path/to/usr/share/autoconf
+export AC_MACRODIR=/path/to/usr/share/autoconf
+export trailer_m4=/path/to/usr/share/autoconf/autoconf/trailer.m4
+# autom4te.cfg 里写死了 /usr/share/autoconf，复制一份并 sed 成实际前缀
+sed 's#/usr/share/autoconf#/path/to/usr/share/autoconf#g' \
+  /path/to/usr/share/autoconf/autom4te.cfg > /tmp/autom4te.cfg
+export AUTOM4TE_CFG=/tmp/autom4te.cfg
+```
+
+**Q: JBR 25 构建时 PCH 相关报错？**
+`PRECOMPILED_HEADERS=disabled ./scripts/build.sh --jbr 25`（25 轨道默认就是 disabled）。
 
 **Q: `--jbr 25` 构建失败/找不到文件怎么办？**
 JBR 25 目前只做到补丁级验证。若失败，先确认 `./scripts/check-patch.sh`（带

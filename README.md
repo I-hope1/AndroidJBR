@@ -17,7 +17,7 @@ with JetBrains' enhanced class redefinition intact.
 | JBR line | 上游 pin | 状态 | 产物 |
 |---|---|---|---|
 | **21** | `jbr21` @ `015db36d`（21.0.11） | ✅ 已构建 + **真机验证**（见下） | [Release v21.0.11-r3](https://github.com/I-hope1/AndroidJBR/releases/tag/v21.0.11-r3) |
-| **25** | `jbr25` @ `1b5d5af9`（25.0.x） | ⚠️ **实验性**：补丁可干净应用（53 文件，+1766/−100），**尚未构建、未真机验证** | 暂无 |
+| **25** | `jbr25` @ `1b5d5af9`（25.0.5.0.3） | ⚠️ **实验性**：✅ 已构建成功（24 分钟/2 vCPU），⏳ 未真机验证 | [Release v25.0.5-r1](https://github.com/I-hope1/AndroidJBR/releases/tag/v25.0.5-r1) |
 
 选择 line：
 
@@ -43,11 +43,14 @@ JBR_LINE=25 ./scripts/check-patch.sh
 **JBR 25（实验性）**
 
 - ✅ 补丁（AngelAuraMC `jdk25u_android.diff` 基底 + AndroidJBR 修复集）对 pin
-  做 `git apply --check` + 实际应用校验（CI 矩阵成员）：53 文件，+1766/−100。
-- ⏳ **未构建**：JBR 25 的 OpenJDK 构建系统与 21 有结构性差异（`JvmMapfile.gmk`
-  移除、`Awt2dLibraries.gmk` 拆分），build 步骤需要在 aarch64 主机上跑通后才算
-  真正可用；`scripts/check-patch.sh` 只保证补丁可应用。
-- ⏳ **未在真机验证**：等构建产物出现后再按 `docs/DEVICE-TEST.md` 跑 probe。
+  做 `git apply --check` + 实际应用校验（CI 矩阵成员）：55 文件，+1774/−103。
+- ✅ **构建成功**（2026-11-14，aarch64 主机，2 vCPU，`make images` 1423 秒）：
+  `libjvm.so` 为 ELF64 AArch64、API 21，`release` = `JAVA_VERSION="25.0.5.0.3"`。
+  构建中修掉的 JDK 25 差异：`make JOBS=N`、`--build=<host>` 强制 cross（否则
+  adlc 被编成 bionic 二进制）、关闭 clang 不兼容的 PCH、`dictionary.hpp`
+  DCEVM 内联函数改用 out-of-line 定义。
+- ⏳ **未在真机验证**：产物已发布，请按 `docs/DEVICE-TEST.md` 跑 probe 后再当
+  稳定版用。
 
 ## 为什么需要它
 
@@ -123,6 +126,22 @@ BOOT_JDK=/opt/jdk-21.0.13+9 \
 ./scripts/build.sh --skip-deps
 ```
 
+## CI
+
+| workflow | 触发 | 内容 |
+|---|---|---|
+| `ci.yml` | push / PR | 两条 line 的补丁校验（~15s）+ shellcheck + 脚本 fail-fast |
+| `build-hosted.yml` | 手动 dispatch | **GitHub 托管 runner（ubuntu-24.04 / x86_64）完整构建**，产物作为 artifact 上传 |
+| `build-full.yml` | 手动 dispatch | 自托管 arm64 runner 完整构建（需要自备 runner） |
+
+托管构建实测参考：JBR 25 冷启动约 25–40 分钟（含依赖下载）；JBR 21 在 2 vCPU
+上约 1 小时。依赖（NDK / Temurin / freetype / elf-cleaner）走 `actions/cache`。
+
+```bash
+gh workflow run build-hosted.yml -f jbr=25 -f jobs=4
+gh run watch
+```
+
 ## 使用（手机侧，JBR 21 产物）
 
 1. 把 `tar.xz` 传到手机（如 `Download/`）。
@@ -146,7 +165,7 @@ BOOT_JDK=/opt/jdk-21.0.13+9 \
 - headless 构建：没有 `libawt_xawt.so`（启动器用自己的假库），无 JCEF/Vulkan 等桌面特性。
 - 每次结构热更会 deopt 整个代码缓存，手机上单次可能卡顿数百 ms 到数秒。
 - 模块集按 Pojav 的 jlink 清单（不含 `jdk.internal.vm.ci`）。
-- JBR 25 是实验轨道：补丁可应用，但构建系统差异尚未端到端验证。
+- JBR 25 是实验轨道：构建已通过（见上），但尚未真机验证。
 - 完整清单与取舍见 [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)。
 
 ## 文档
