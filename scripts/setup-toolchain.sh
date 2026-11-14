@@ -58,7 +58,11 @@ else
     cd "$FREETYPE_SRC"
     # Always rebuild from a pristine tree: config.cache / stale objects from a
     # host build are a classic source of "wrong ELF class" failures.
-    git clean -xdfq 2>/dev/null || true
+    # Only clean with git when the freetype source really is its own repo: when
+    # WORK lives inside a checkout (CI), `git clean` would walk up to that repo
+    # and try to delete the caller's tree — git refuses with "Refusing to remove
+    # current working directory".
+    if [ -d .git ]; then git clean -xdfq; fi
     rm -rf "$FREETYPE_PREFIX"
     CC="$WRAP_CC" CXX="$WRAP_CXX" AR="$HOST_AR" RANLIB="$HOST_RANLIB" \
       ./configure \
