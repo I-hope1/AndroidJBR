@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-check:
+    name: patch series applies to JBR pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show pin / series
+        run: |
+          grep -E '^(export )?(JBR_PIN|JBR_BRANCH)=' scripts/env.sh
+          cat patches/series
+
+      - name: Verify patches apply on the pinned JetBrainsRuntime tree
+        # Blob-less partial clone + sparse checkout: only the 44 files the
+        # patches touch are materialised (~15 MB, a few seconds).
+        run: ./scripts/check-patch.sh
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck if missing
+        run: |
+          command -v shellcheck >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          }
+          shellcheck --version | head -2
+
+      - name: Bash syntax check
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+
+      - name: ShellCheck
+        run: shellcheck --severity=error --external-sources scripts/*.sh
+
+  scripts-static:
+    name: scripts fail fast with clear errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Help output works without any dependencies
+        run: ./scripts/build.sh --help
+
+      - name: Missing toolchain is reported, not a random shell error
+        run: |
+          set +e
+          out=$(env -u NDK WORK=/tmp/empty-work ./scripts/03-configure.sh 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -ne 0 ] || { echo "expected a non-zero exit"; exit 1; }
+          printf '%s' "$out" | grep -q 'FATAL' \
+            || { echo "error message is not actionable"; exit 1; }

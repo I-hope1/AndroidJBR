@@ -1,0 +1,74 @@
+name: Full build (self-hosted arm64)
+
+# A complete cross-build is ~1 h on 2 vCPU and needs ~4 GB of downloaded
+# toolchains plus several GB of build output, so it is not run on GitHub-hosted
+# runners.  Trigger it manually on a self-hosted aarch64 Linux runner that has
+# the dependencies from docs/BUILD.md (clang-18, lld-18, llvm-18, make,
+# autoconf, cmake, git, curl, xz, zip, unzip, file).
+#
+# The runner needs a label set matching: [self-hosted, linux, arm64]
+# (adjust `runs-on` below if your runner uses different labels).
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Parallel make jobs (JOBS)"
+        required: false
+        default: "2"
+      clean_build:
+        description: "Wipe the JBR build directory first (make clean images)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, arm64]
+    timeout-minutes: 240
+    env:
+      JOBS: ${{ inputs.jobs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check host dependencies
+        run: |
+          set -eu
+          missing=""
+          for c in make cmake autoconf git curl xz zip unzip file llvm-ar llvm-strip; do
+            command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+          done
+          command -v clang-18 >/dev/null 2>&1 || missing="$missing clang-18"
+          if [ -n "$missing" ]; then
+            echo "::error::missing host tools:$missing — see docs/BUILD.md"
+            exit 1
+          fi
+          echo "host: $(uname -m) / $(nproc) cpus"
+
+      - name: Build and package
+        run: |
+          flags=""
+          [ "${{ inputs.clean_build }}" = "true" ] && flags="--clean-build"
+          ./scripts/build.sh $flags
+
+      - name: Verify artifact
+        run: |
+          set -eu
+          ls -lh out/*.tar.xz out/SHA256SUMS.txt
+          ( cd out && sha256sum -c SHA256SUMS.txt )
+          mkdir -p /tmp/jre-check
+          tar -xJf out/jre21-jbr-android-arm64-*.tar.xz -C /tmp/jre-check
+          file /tmp/jre-check/lib/server/libjvm.so | grep -q 'ARM aarch64'
+          grep -E '^(JAVA_VERSION|OS_ARCH)=' /tmp/jre-check/release
+
+      - name: Upload JRE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jre21-jbr-android-${{ github.run_number }}
+          path: |
+            out/jre21-jbr-android-arm64-*.tar.xz
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,12 @@
+# build work area (toolchains, sources, logs) — never committed
+/work/
+/out/
+
+# release artifacts (attached to GitHub Releases, not stored in git)
+*.tar.xz
+*.tar.gz
+
+# scratch
+*.log
+*.part
+.DS_Store
