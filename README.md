@@ -131,11 +131,14 @@ BOOT_JDK=/opt/jdk-21.0.13+9 \
 | workflow | 触发 | 内容 |
 |---|---|---|
 | `ci.yml` | push / PR | 两条 line 的补丁校验（~15s）+ shellcheck + 脚本 fail-fast |
-| `build-hosted.yml` | 手动 dispatch | **GitHub 托管 runner（ubuntu-24.04 / x86_64）完整构建**，产物作为 artifact 上传 |
+| `build-hosted.yml` | 手动 dispatch | **GitHub 托管 runner（ubuntu-24.04 / x86_64）完整构建**，产物作为 artifact 上传。JBR 25 已验证：✅ 2026-11-14，run [43579547510](https://github.com/I-hope1/AndroidJBR/actions/runs/43579547510)，18 分钟，artifact 30 MB |
 | `build-full.yml` | 手动 dispatch | 自托管 arm64 runner 完整构建（需要自备 runner） |
 
-托管构建实测参考：JBR 25 冷启动约 25–40 分钟（含依赖下载）；JBR 21 在 2 vCPU
-上约 1 小时。依赖（NDK / Temurin / freetype / elf-cleaner）走 `actions/cache`。
+托管构建实测：JBR 25 从冷启动到上传 artifact 共 **18 分钟**（4 vCPU、含 NDK /
+Temurin / freetype 下载与全部编译）；JBR 21 在 2 vCPU 上约 1 小时，托管 runner
+上更短。依赖（NDK / Temurin / freetype / elf-cleaner / 头文件）走 `actions/cache`。
+CI 产物与本地发布的 tar.xz **字节不同但结构一致**（宿主编译器/路径差异；
+`release` 里 `JAVA_RUNTIME_VERSION` 带构建机名后缀），校验方式同 `docs/DEVICE-TEST.md`。
 
 ```bash
 gh workflow run build-hosted.yml -f jbr=25 -f jobs=4

@@ -285,8 +285,16 @@ Ubuntu 的 `llvm-18` 包只安装带版本号的二进制（`llvm-ar-18`、`llvm
 工具链设计与宿主架构无关（NDK sysroot + 宿主 clang），`fetch-deps.sh` 会按
 `uname -m` 选 Temurin 的 x64 资产。`.github/workflows/build-hosted.yml` 就是
 在 GitHub 托管的 ubuntu-24.04（x86_64）上跑完整构建；`build-full.yml` 保留
-自托管 arm64 的路径。托管 runner 需要 `sudo rm -rf` 释放磁盘（workflow 里已做），
-依赖走 `actions/cache`。
+自托管 arm64 的路径。实测 JBR 25 全程 **18 分钟**（4 vCPU，含依赖下载），依赖走
+`actions/cache`；x86_64 宿主不需要删任何预装组件（runner 有 100+ GB 可用）。
+
+x86_64 宿主和 aarch64 宿主有两处行为差异，脚本都已处理：
+
+- 宿主 GNU binutils（`/usr/bin/objcopy` 等）只能处理 x86 ELF，必须用 LLVM 的
+  多目标版本；JDK 25 会忽略环境变量里的 `AR/STRIP/OBJCOPY`，所以要作为
+  configure 命令行变量传入（`03-configure.sh` 两者都传）；
+- NDK sysroot 缺 fontconfig / X11 头，`fetch-deps.sh` 会把宿主发行版的
+  `fontconfig/`、`X11/` 头目录拷进 sysroot。
 
 **Q: 无 root 环境用解包的 autoconf，configure 报找不到 autom4te / m4sugar？**
 deb 解包的 autoconf 内部路径仍指向 `/usr/share/autoconf`、`/usr/bin/autom4te`。
