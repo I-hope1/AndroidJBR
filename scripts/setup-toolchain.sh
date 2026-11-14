@@ -97,8 +97,13 @@ else
       || die "elf-cleaner cmake failed — see $WORK/elfc-cmake.log"
     cmake --build build -j"$JOBS" >> "$WORK/elfc-cmake.log" 2>&1 \
       || die "elf-cleaner build failed — see $WORK/elfc-cmake.log"
+    # The upstream CMake target was renamed to "termux-elf-cleaner" (3.x);
+    # accept the old name too so a pinned older checkout keeps working.
+    elfc_bin=build/termux-elf-cleaner
+    [ -x "$elfc_bin" ] || elfc_bin=build/elf-cleaner
+    [ -x "$elfc_bin" ] || die "elf-cleaner binary not found after cmake build"
     mkdir -p "$(dirname "$ELFC")"
-    install -m 0755 build/elf-cleaner "$ELFC"
+    install -m 0755 "$elfc_bin" "$ELFC"
   )
 fi
 
