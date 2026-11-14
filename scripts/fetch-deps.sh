@@ -82,14 +82,19 @@ fi
 # subtrees out of the host distro into $SYSROOT_EXTRA/include so host glibc
 # headers never leak into the bionic build; 03-configure.sh points
 # --with-fontconfig-include / --x-includes at it.
+# Copy them INTO the sysroot (not just an -I dir): the build system only adds
+# -I$FONTCONFIG_INCLUDE to some java.desktop libraries, while others
+# (libawt/fontconfigmanager.c) rely on the sysroot's implicit /usr/include
+# search path.  This mirrors the layout the JBR 21 device build was verified
+# with.
 if [ -f "$ANDROID_SYSROOT/usr/include/fontconfig/fontconfig.h" ]; then
   info "NDK sysroot already provides fontconfig headers"
 else
   missing=()
+  mkdir -p "$ANDROID_SYSROOT/usr/include"
   for d in fontconfig X11; do
     if [ -d "/usr/include/$d" ]; then
-      mkdir -p "$SYSROOT_EXTRA/include"
-      cp -a "/usr/include/$d" "$SYSROOT_EXTRA/include/"
+      cp -a "/usr/include/$d" "$ANDROID_SYSROOT/usr/include/"
     else
       missing+=("$d")
     fi
@@ -100,7 +105,7 @@ else
     sudo apt-get install libfontconfig1-dev libx11-dev libxext-dev \
                          libxrender-dev libxi-dev libxtst-dev"
   fi
-  info "sysroot extras assembled in $SYSROOT_EXTRA/include"
+  info "copied fontconfig/X11 headers into the NDK sysroot"
 fi
 
 # --- termux-elf-cleaner (built by setup-toolchain.sh) ---------------------
