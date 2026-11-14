@@ -103,6 +103,10 @@ rm -rf "$JBR_SRC/build"
     --x-includes="$X_INCLUDE" \
     --x-libraries=/usr/lib \
     "${pch_args[@]}" \
+    AR="$HOST_AR" \
+    RANLIB="$HOST_RANLIB" \
+    OBJCOPY="$HOST_OBJCOPY" \
+    STRIP="$HOST_STRIP" \
     > "$CONFIGURE_LOG" 2>&1
 ) || {
   tail -n 40 "$CONFIGURE_LOG" >&2
