@@ -271,6 +271,12 @@ JBR pin 与补丁必须成对存在。检查 `JBR_PIN` 是否被改动；先用
 `setup-toolchain.sh`；`setup-toolchain.sh` 的 C/C++ 冒烟测试也会提前暴露这个
 问题。
 
+**Q: 在 Ubuntu 上 `apt-get install llvm-18` 后报 `llvm-ar not found`？**
+Ubuntu 的 `llvm-18` 包只安装带版本号的二进制（`llvm-ar-18`、`llvm-strip-18`…），
+无版本号的名字来自 `update-alternatives`，CI 镜像上通常没启用。`scripts/lib.sh`
+会自动解析 `-22`…`-17` 后缀版本（也支持 PATH 里的无版本名），所以
+`LLVM_ROOT=/usr` 直接可用；无需手工设 `HOST_AR`。
+
 **Q: configure 找不到 clang / `libLLVM-18.so.1`。**
 `LLVM_ROOT` 指向的前缀里需要有 `bin/clang-18`、`bin/llvm-ar`（无 root 解包场景
 还要 `lib/llvm-18/lib`）。看 `scripts/env.sh` 的 `LLVM_*` 变量。
@@ -279,7 +285,8 @@ JBR pin 与补丁必须成对存在。检查 `JBR_PIN` 是否被改动；先用
 工具链设计与宿主架构无关（NDK sysroot + 宿主 clang），`fetch-deps.sh` 会按
 `uname -m` 选 Temurin 的 x64 资产。`.github/workflows/build-hosted.yml` 就是
 在 GitHub 托管的 ubuntu-24.04（x86_64）上跑完整构建；`build-full.yml` 保留
-自托管 arm64 的路径。
+自托管 arm64 的路径。托管 runner 需要 `sudo rm -rf` 释放磁盘（workflow 里已做），
+依赖走 `actions/cache`。
 
 **Q: 无 root 环境用解包的 autoconf，configure 报找不到 autom4te / m4sugar？**
 deb 解包的 autoconf 内部路径仍指向 `/usr/share/autoconf`、`/usr/bin/autom4te`。
