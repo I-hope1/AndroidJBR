@@ -27,6 +27,31 @@ need_dir() {
   [ -d "$1" ] || die "required directory not found: $1${2:+ — $2}"
 }
 
+# --- host LLVM binutils resolution -----------------------------------------
+# Debian/Ubuntu package versioned binaries (llvm-ar-18, llvm-strip-18, ...) and
+# only create unversioned names through update-alternatives, which is often not
+# active on CI images.  Accept both spellings so LLVM_ROOT=/usr works after
+# `apt-get install llvm-18`.
+_androidjbr_resolve_llvm_binutil() {
+  local var=$1 cur base cand
+  eval "cur=\$$var"
+  [ -x "$cur" ] && return 0
+  base=${cur##*/}
+  for cand in "$LLVM_BIN/${base}-22" "$LLVM_BIN/${base}-21" "$LLVM_BIN/${base}-20" \
+              "$LLVM_BIN/${base}-19" "$LLVM_BIN/${base}-18" "$LLVM_BIN/${base}-17"; do
+    [ -x "$cand" ] && { export "$var=$cand"; return 0; }
+  done
+  cand=$(command -v "$base" 2>/dev/null || true)
+  [ -n "$cand" ] && export "$var=$cand"
+  return 0
+}
+if [ -n "${LLVM_BIN:-}" ]; then
+  for _v in HOST_AR HOST_RANLIB HOST_OBJCOPY HOST_STRIP HOST_NM; do
+    _androidjbr_resolve_llvm_binutil "$_v"
+  done
+  unset _v
+fi
+
 # require_jbr_line: validate JBR_LINE early with a list of supported lines.
 require_jbr_line() {
   [ "${JBR_LINE_OK:-0}" = "1" ] \
