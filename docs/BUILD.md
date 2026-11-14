@@ -48,8 +48,16 @@ sudo apt-get update
 sudo apt-get install -y \
   build-essential make autoconf m4 zip unzip file \
   clang-18 lld-18 llvm-18 libclang-18-dev \
-  cmake git curl xz-utils
+  cmake git curl xz-utils \
+  libfontconfig1-dev libx11-dev libxext-dev libxrender-dev \
+  libxrandr-dev libxi-dev libxtst-dev libxt-dev
 ```
+
+后两组 `-dev` 包只提供**头文件**：NDK r27c 的 sysroot 里没有
+`fontconfig/fontconfig.h` 和 `X11/*`，而 java.desktop（headless 的
+`libfontmanager`/`libawt`）和 JBR 21 的 configure 需要它们。`fetch-deps.sh` 会把
+这些头目录拷进 `$ANDROID_SYSROOT/usr/include`，因此 **glibc 的其它头不会被带进
+bionic 构建**。
 
 `clang-18` 提供 `/usr/bin/clang-18`、`/usr/bin/llvm-ar`、`/usr/lib/llvm-18/lib`，
 即 `scripts/env.sh` 默认的 `LLVM_ROOT=/usr`。
@@ -77,9 +85,9 @@ LLVM_ROOT=$PWD/work/llvm/usr ./scripts/setup-toolchain.sh
 export LD_LIBRARY_PATH=$LLVM_ROOT/lib/llvm-18/lib:$LD_LIBRARY_PATH
 ```
 
-> 原设备另外解包了 `libx11-dev`、`libfontconfig-dev`、`libstdc++-13-dev` 等，
-> 属于早期尝试的遗留；最终 configure 的 X11/fontconfig 头都指向 NDK sysroot，
-> 构建并不需要这些宿主 dev 包。
+> 原设备另外解包了 `libx11-dev`、`libfontconfig1-dev`、`libstdc++-13-dev` 等，
+> 并把 fontconfig/X11 头目录拷进了 NDK sysroot——这正是现在 `fetch-deps.sh`
+> 自动做的步骤（见 3.1）；没有这些头，java.desktop 和 JBR 21 的 configure 会失败。
 
 ## 4. 工具链原理（最容易踩坑的部分）
 
