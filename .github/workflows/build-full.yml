@@ -12,6 +12,11 @@ name: Full build (self-hosted arm64)
 on:
   workflow_dispatch:
     inputs:
+      jbr:
+        description: "JetBrainsRuntime line to build"
+        type: choice
+        options: ["21", "25"]
+        default: "21"
       jobs:
         description: "Parallel make jobs (JOBS)"
         required: false
@@ -29,6 +34,7 @@ jobs:
     runs-on: [self-hosted, linux, arm64]
     timeout-minutes: 240
     env:
+      JBR_LINE: ${{ inputs.jbr }}
       JOBS: ${{ inputs.jobs }}
     steps:
       - uses: actions/checkout@v4
@@ -59,16 +65,16 @@ jobs:
           ls -lh out/*.tar.xz out/SHA256SUMS.txt
           ( cd out && sha256sum -c SHA256SUMS.txt )
           mkdir -p /tmp/jre-check
-          tar -xJf out/jre21-jbr-android-arm64-*.tar.xz -C /tmp/jre-check
+          tar -xJf out/jre*-jbr-android-arm64-*.tar.xz -C /tmp/jre-check
           file /tmp/jre-check/lib/server/libjvm.so | grep -q 'ARM aarch64'
           grep -E '^(JAVA_VERSION|OS_ARCH)=' /tmp/jre-check/release
 
       - name: Upload JRE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jre21-jbr-android-${{ github.run_number }}
+          name: jre${{ inputs.jbr }}-jbr-android-${{ github.run_number }}
           path: |
-            out/jre21-jbr-android-arm64-*.tar.xz
+            out/jre*-jbr-android-arm64-*.tar.xz
             out/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14

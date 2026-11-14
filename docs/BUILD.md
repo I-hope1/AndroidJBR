@@ -3,25 +3,45 @@
 本文记录 AndroidJBR 的完整构建链路。`scripts/` 里的脚本就是本文的可执行版本；
 两者的差别只在路径（脚本用 `$WORK` 覆盖）。
 
-> 原构建环境：**Ubuntu 24.04 aarch64、2 vCPU / 11 GB、无 root**。
+> 原构建环境：**Ubuntu 24.04 aarch64、2 vCPU / 11 GB、无 root**（JBR 21）。
 > `make images` 约 1 小时；`tar.xz` 约 30 MB、解压约 140 MB。
+> JBR 25 的构建流程相同，但**尚未在本项目里端到端跑过**。
 
-## 1. 组件与版本
+## 1. 选择 JBR line
+
+`scripts/env.sh` 用 `JBR_LINE` 选择源码 pin、boot JDK 和补丁目录：
+
+| JBR_LINE | branch @ pin | boot JDK | 补丁目录 | 状态 |
+|---|---|---|---|---|
+| `21`（默认） | `jbr21` @ `015db36d` | Temurin 21.0.13+9 | `patches/jbr21/` | 已构建 + 真机验证 |
+| `25` | `jbr25` @ `1b5d5af9` | Temurin 25.0.5+8 | `patches/jbr25/` | 实验性：仅补丁级验证 |
+
+```bash
+./scripts/build.sh            # JBR 21
+./scripts/build.sh --jbr 25   # JBR 25
+JBR_LINE=25 ./scripts/check-patch.sh
+```
+
+每个 line 有独立的源码树（`$WORK/JetBrainsRuntime-<line>`）和日志，可以并存；
+NDK/freetype/elf-cleaner 等工具链组件共享。
+
+## 2. 组件与版本
 
 | 组件 | 版本 / 固定点 | 用途 |
 |---|---|---|
-| JetBrainsRuntime | `jbr21` @ `015db36dcaaf5fd670735a10b74dd413b190a40d`（21.0.11） | 源码 |
-| PojavLauncher android 补丁 | `PojavLauncherTeam/android-openjdk-build-multiarch` @ `f3936fb`，`patches/jre_21/android/jdk21u_android.diff` + `26_skip_proc_net6_check.diff` | bionic 移植基线 |
+| JetBrainsRuntime | `jbr21` @ `015db36d…`（21.0.11）或 `jbr25` @ `1b5d5af9…` | 源码 |
+| bionic 移植基线（JBR 21） | `PojavLauncherTeam/android-openjdk-build-multiarch` @ `f3936fb`：`patches/jre_21/android/jdk21u_android.diff` + `26_skip_proc_net6_check.diff` | 手解 6 个冲突后并入补丁 |
+| bionic 移植基线（JBR 25） | `AngelAuraMC/angelauramc-openjdk-build`（`fcl/BUILD_JRE_25`）`patches/jdk25u_android.diff`，sha256 `c9aa3e95…` | 手解 4 个冲突后并入补丁 |
 | NDK | r27c（`android-ndk-r27c-linux.zip`） | **只用 sysroot / 头文件 / clang resource dir** |
 | 交叉编译器 | 宿主 clang-18 + lld-18 + LLVM 18 binutils | 真正的编译器 |
-| Boot/Build JDK | Temurin 21.0.13+9（宿主架构） | 编译期 javac/jlink |
+| Boot/Build JDK | Temurin 21.0.13+9（JBR 21）/ Temurin 25.0.5+8（JBR 25），宿主架构 | 编译期 javac/jlink |
 | freetype | 2.10.0（交叉编译） | AWT 字体 |
 | CUPS | 2.2.4 源码（只用头文件） | `--with-cups-include` |
 | termux-elf-cleaner | `f9273bc` | 产物 ELF 的 API 21 清理 |
 
-## 2. 主机依赖
+## 3. 主机依赖
 
-### 2.1 有 root（推荐）
+### 3.1 有 root（推荐）
 
 ```bash
 sudo apt-get update
@@ -34,7 +54,7 @@ sudo apt-get install -y \
 `clang-18` 提供 `/usr/bin/clang-18`、`/usr/bin/llvm-ar`、`/usr/lib/llvm-18/lib`，
 即 `scripts/env.sh` 默认的 `LLVM_ROOT=/usr`。
 
-### 2.2 无 root：解包 .deb（原构建设备的做法）
+### 3.2 无 root：解包 .deb（原构建设备的做法）
 
 原环境没有 sudo，做法是 `apt-get download` + `dpkg -x` 到用户目录，然后把
 `LLVM_ROOT` 指过去：
@@ -61,9 +81,9 @@ export LD_LIBRARY_PATH=$LLVM_ROOT/lib/llvm-18/lib:$LD_LIBRARY_PATH
 > 属于早期尝试的遗留；最终 configure 的 X11/fontconfig 头都指向 NDK sysroot，
 > 构建并不需要这些宿主 dev 包。
 
-## 3. 工具链原理（最容易踩坑的部分）
+## 4. 工具链原理（最容易踩坑的部分）
 
-### 3.1 为什么用宿主 clang-18 而不是 NDK 的 clang
+### 4.1 为什么用宿主 clang-18 而不是 NDK 的 clang
 
 Android NDK 不提供 linux-aarch64 宿主版编译器（只发 linux-x86_64）。但本构建
 只需要 NDK 的 **sysroot（bionic 头文件 + 各架构 .so）** 和 **clang resource
@@ -75,7 +95,7 @@ dir（compiler-rt / libc++ 归档）**，二者与宿主架构无关。
   也照样可用，**不是笔误**；
 - 实际编译器是宿主的 `clang-18`，用 `--target=aarch64-linux-android21` 交叉。
 
-### 3.2 clang 包装器
+### 4.2 clang 包装器
 
 OpenJDK 的 `configure` 要按 gcc 家族识别工具链（构建文件里到处是
 `-fno-var-tracking-assignments` 这类 gcc 参数），所以 `setup-toolchain.sh`
@@ -100,14 +120,14 @@ clang-18 --target=aarch64-linux-android21 \
 | `--rtlib=compiler-rt` + `-fuse-ld=lld` | bionic 目标的标准组合；用 GNU ld 会失败 |
 | `scope`/版本探测通过 | configure 的 `--with-toolchain-type=gcc` 只是分类，不实际调用 gcc |
 
-### 3.3 dummy_libs
+### 4.3 dummy_libs
 
 bionic 没有 `libpthread.so`/`librt.so`/`libthread_db.so`（都并进 libc），但
 OpenJDK 的链接命令会显式 `-lpthread -lrt -lthread_db`。`scripts/02` 在
 `$JBR_SRC/dummy_libs/` 生成三个空归档（内容就是 `!<arch>\n`），configure 通过
 `--with-extra-ldflags=-L$JBR_SRC/dummy_libs` 把它们排在系统库之前，链接即可成功。
 
-## 4. Configure
+## 5. Configure
 
 `scripts/03-configure.sh` 执行的参数（与产物 `spec.gmk` 的
 `CONFIGURE_COMMAND_LINE` 一致，路径用变量表示）：
@@ -154,6 +174,13 @@ bash configure \
 | `--with-fontconfig-include`/`--x-includes` | 都指向 NDK sysroot；**不要**指向宿主 `/usr/include`，否则会把 glibc 头带进来 |
 | `--with-freetype-*` | 必须用交叉编译出来的 freetype（`file` 显示 ARM aarch64），宿主 freetype 会链接失败 |
 
+> JBR 25 注意：上面这组 flag 在 JBR 25 上**未经构建验证**。JDK 25 的
+> `--with-jvm-features` 仍然接受 `dtrace/zero/vm-structs/epsilongc/zgc/shenandoahgc/jvmci`
+> 这组名字（已核对 `make/hotspot/lib/JvmFeatures.gmk`），但 `make/modules/java.desktop`
+> 的库布局已重构（`Awt2dLibraries.gmk` 拆成 `AwtLibraries.gmk` / `ClientLibraries.gmk` 等，
+> `JvmMapfile.gmk` 被移除），补丁已按新布局适配；实际 configure/make 结果需在
+> aarch64 主机上验证。
+
 configure 成功后产物目录固定为：
 
 ```
@@ -162,7 +189,7 @@ $JBR_SRC/build/linux-aarch64-server-release/
 
 （由 `TARGET_JDK=aarch64`、`JVM_VARIANTS=server`、`DEBUG_LEVEL=release` 决定。）
 
-## 5. 构建
+## 6. 构建
 
 ```bash
 cd $JBR_SRC
@@ -176,7 +203,7 @@ make images JOBS=2        # scripts/04-build.sh
 
 产物：`build/linux-aarch64-server-release/images/jdk/`。
 
-## 6. 打包（jlink → Pojav 可导入的 JRE）
+## 7. 打包（jlink → Pojav 可导入的 JRE）
 
 `scripts/05-package-jre.sh` 的步骤：
 
@@ -195,10 +222,10 @@ make images JOBS=2        # scripts/04-build.sh
 模块清单来自 Pojav 的 jlink 列表（去掉 `jvmci`；`java.desktop` 保留供字体/AWT
 类加载，但实现是 headless）。
 
-## 7. 产物校验
+## 8. 产物校验
 
 ```bash
-file out/jre21-jbr-android-arm64-*.tar.xz     # 存在
+file out/jre*-jbr-android-arm64-*.tar.xz      # 存在
 tar -xJf out/jre...tar.xz -C /tmp/jre && file /tmp/jre/lib/server/libjvm.so
 # -> ELF 64-bit LSB shared object, ARM aarch64
 
@@ -215,7 +242,7 @@ grep -E '^(JAVA_VERSION|OS_ARCH)=' /tmp/jre/release
 
 `scripts/05-package-jre.sh` 会自动做上述关键断言。
 
-## 8. 常见问题
+## 9. 常见问题
 
 **Q: `git apply --check` 报 hunk 冲突（`patch does not apply`）。**
 JBR pin 与补丁必须成对存在。检查 `JBR_PIN` 是否被改动；先用
@@ -244,6 +271,15 @@ JBR pin 与补丁必须成对存在。检查 `JBR_PIN` 是否被改动；先用
 工具链设计与宿主架构无关（NDK sysroot + 宿主 clang），`fetch-deps.sh` 会按
 `uname -m` 选 Temurin 的 x64 资产。但本仓库**未在 x86_64 上端到端验证过**，
 按 README 的"已验证"口径，真机产物来自 aarch64 宿主。
+
+**Q: `--jbr 25` 构建失败/找不到文件怎么办？**
+JBR 25 目前只做到补丁级验证。若失败，先确认 `./scripts/check-patch.sh`（带
+`JBR_LINE=25`）通过，再看 `$WORK/build-jbr25.log`；构建系统差异属于已知风险，
+见 README「支持矩阵」。
+
+**Q: 两个 line 会互相覆盖吗？**
+不会：源码树、build 目录、日志、产物名都带 line/版本（`$WORK/JetBrainsRuntime-<line>`、
+`$WORK/build-jbr<line>.log`、`jre<21|25>-...`）。共享的只有 NDK/freetype/elf-cleaner。
 
 **Q: CI 为什么只校验补丁？**
 完整构建需要 ~1 小时 + 数 GB 磁盘 + NDK/boot JDK，不适合 GitHub 托管 runner。

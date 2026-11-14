@@ -66,7 +66,25 @@ ICHolder 释放跟踪、`libinstrument` 入口打点）在 **final-r3 已全部�
 - **上游漂移**：JBR/OpenJDK 后续改动会让补丁冲突；pin 升级需重跑
   `scripts/check-patch.sh` 并重新验证真机。
 
-## 5. 修复验证记录（真机，v5-tagfix）
+## 5. JBR 25 轨道（实验性）
+
+JBR 25 的补丁以 **AngelAuraMC `jdk25u_android.diff`**（52 个 diff 段，sha256 `c9aa3e95…`）
+为 bionic 移植基底，再叠加本仓库的 AndroidJBR 修复集，打到 `jbr25` @ `1b5d5af9`。
+最终补丁 53 个文件（48 修改 + 5 新增），+1766/−100；6 个冲突 hunk 已手工解决。
+已知状态与风险：
+
+| 项 | 状态 |
+|---|---|
+| 补丁干净应用（`git apply --check`） | ✅ CI 矩阵成员 |
+| 构建（configure + make images） | ❌ 未跑过；JDK 25 构建系统变化（`JvmMapfile.gmk` 移除、`Awt2dLibraries.gmk` 拆分）已按新布局适配，但属于纸面适配 |
+| 真机验证 | ❌ 无产物 |
+| DCEVM 可用性 | 未验证（JBR 25 是否仍保留 `-XX:+AllowEnhancedClassRedefinition` 实现需构建后 `strings libjvm.so` 确认） |
+| 旧补丁移植风险 | `libinstrument`/`libjdwp` 的 UTF-8 codeset、`os::malloc` untag/retag 等修复已按 JBR 25 源码位置重新落点，语义未重新编译验证 |
+
+建议流程：先在 aarch64 主机 `./scripts/build.sh --jbr 25`，产物按第 8 节校验，
+再按 docs/DEVICE-TEST.md 跑 `dcevm-probe.jar`；通过后再把 JBR 25 从"实验性"升级。
+
+## 6. 修复验证记录（真机，v5-tagfix）
 
 | 场景 | 结果 |
 |---|---|

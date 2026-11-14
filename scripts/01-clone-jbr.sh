@@ -12,6 +12,7 @@ source "$_script_dir/env.sh"
 source "$_script_dir/lib.sh"
 
 need_cmd git
+require_jbr_line
 print_summary
 
 if [ -d "$JBR_SRC/.git" ]; then
@@ -38,11 +39,14 @@ git -C "$JBR_SRC" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
 have=$(git -C "$JBR_SRC" rev-parse HEAD)
 [ "$have" = "$JBR_PIN" ] || die "checked out $have, expected $JBR_PIN"
 
-# Full-checkout sanity: the port patch touches java.desktop and make/modules;
-# if those are missing the clone is sparse/partial and the patch will not apply.
-for f in make/modules/java.desktop/lib/Awt2dLibraries.gmk src/java.desktop/unix/native/libawt/awt/awt_LoadLibrary.c; do
+# Full-checkout sanity: the port patches touch the build system, HotSpot and
+# java.desktop.  If those are missing the clone is sparse/partial and the patch
+# will not apply.  Paths are deliberately layout-agnostic (the java.desktop
+# build files were reorganised between JDK 21 and 25).
+for f in make/autoconf/platform.m4 src/hotspot/share/runtime/os.cpp \
+         src/java.desktop/unix/native/libawt/awt/awt_LoadLibrary.c; do
   [ -f "$JBR_SRC/$f" ] || die "incomplete checkout, missing $f"
 done
 
-info "JBR source ready: $JBR_SRC"
+info "JBR $JBR_LINE source ready: $JBR_SRC"
 info "next: ./scripts/02-apply-patches.sh"

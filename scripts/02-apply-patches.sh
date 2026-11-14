@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AndroidJBR — step 2/5: apply patches/series on top of the pinned JBR tree.
+# AndroidJBR — step 2/5: apply patches/jbr<N>/series on top of the pinned JBR tree.
 #
 # The series is applied with `git apply`; every patch must apply cleanly and is
 # checked before it is allowed to touch the tree.  When the series is applied
@@ -13,12 +13,10 @@ source "$_script_dir/env.sh"
 # shellcheck source=lib.sh
 source "$_script_dir/lib.sh"
 
-PATCH_DIR="$ANDROIDJBR_HOME/patches"
-SERIES="$PATCH_DIR/series"
-
 need_cmd git
+require_jbr_line
 need_dir "$JBR_SRC/.git" "run ./scripts/01-clone-jbr.sh first"
-need_file "$SERIES"
+SERIES="$PATCH_SERIES"
 mkdir -p "$WORK"
 
 # Give the checkout a local identity so committing the applied series does not
@@ -53,7 +51,7 @@ while IFS= read -r line; do
   line=$(printf '%s' "$line" | xargs)
   [ -n "$line" ] || continue
   patch="$PATCH_DIR/$line"
-  need_file "$patch" "listed in patches/series"
+  need_file "$patch" "listed in $SERIES"
 
   if git -C "$JBR_SRC" apply --reverse --check --whitespace=nowarn "$patch" 2>/dev/null; then
     info "already applied: $line"
@@ -63,8 +61,8 @@ while IFS= read -r line; do
   if ! git -C "$JBR_SRC" apply --check --whitespace=nowarn "$patch" 2>"$WORK/apply-error.log"; then
     cat "$WORK/apply-error.log" >&2
     die "patch does not apply cleanly: $line
-  The JBR pin (${JBR_PIN:0:12}) and the patch must stay in sync.  Re-generate the
-  patch against the pin or adjust JBR_PIN, see patches/README.md."
+  The JBR $JBR_LINE pin (${JBR_PIN:0:12}) and the patch must stay in sync.
+  Re-generate the patch against the pin or adjust JBR_PIN, see patches/README.md."
   fi
   info "applying $line"
   git -C "$JBR_SRC" apply --whitespace=nowarn "$patch" \
@@ -84,7 +82,7 @@ done
 if [ -n "$(git -C "$JBR_SRC" status --porcelain)" ]; then
   git -C "$JBR_SRC" add -A
   git -C "$JBR_SRC" commit --quiet \
-    -m "AndroidJBR: apply patch series on ${JBR_PIN:0:12} (${count} applied this run)"
+    -m "AndroidJBR: apply JBR $JBR_LINE patch series on ${JBR_PIN:0:12} (${count} applied this run)"
 fi
 
 info "patched tree: $(git -C "$JBR_SRC" diff --stat "$JBR_PIN" | tail -1)"

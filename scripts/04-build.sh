@@ -15,6 +15,7 @@ source "$_script_dir/env.sh"
 source "$_script_dir/lib.sh"
 
 target_args=(images)
+require_jbr_line
 [ "${1:-}" = "--clean" ] && target_args=(clean images)
 
 need_dir "$JBR_SRC" "run ./scripts/01-clone-jbr.sh first"

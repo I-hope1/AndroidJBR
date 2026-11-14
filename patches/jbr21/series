@@ -1,4 +1,4 @@
-# AndroidJBR patch series — applied in this order by scripts/02-apply-patches.sh.
+# AndroidJBR patch series for JetBrainsRuntime jbr21 (JDK 21).
 # One file name per line; blank lines and # comments are ignored.
 # Format: git-format patch generated against $JBR_PIN (015db36dcaaf5fd670735a10b74dd413b190a40d).
 jbr21-android-port.patch

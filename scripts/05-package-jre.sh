@@ -2,7 +2,7 @@
 # AndroidJBR — step 5/5: turn the built images into a PojavLauncher-compatible
 # bionic aarch64 JRE tarball.
 #
-#   out/jre21-jbr-android-arm64-<YYYYMMDD>.tar.xz   (~30 MB, ~140 MB unpacked)
+#   out/jre<21|25>-jbr-android-arm64-<YYYYMMDD>.tar.xz   (~30 MB, ~140 MB unpacked)
 #   out/SHA256SUMS.txt
 #
 # What happens here:
@@ -22,10 +22,11 @@ source "$_script_dir/env.sh"
 source "$_script_dir/lib.sh"
 
 IMAGES="$BUILD_DIR/images/jdk"
+require_jbr_line
 STAGE_JDK="$OUT/stage-jdk"
 STAGE_JRE="$OUT/stage-jre"
 STAMP=$(date +%Y%m%d)
-TARBALL="$OUT/jre21-jbr-android-${TARGET_SHORT}-${STAMP}.tar.xz"
+TARBALL="$OUT/jre${JDK_MAJOR}-jbr-android-${TARGET_SHORT}-${STAMP}.tar.xz"
 
 need_cmd tar; need_cmd sha256sum; need_cmd readelf; need_cmd file
 need_cmd xz

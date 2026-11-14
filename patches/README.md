@@ -1,70 +1,105 @@
 # patches/
 
-## What this is
+按 JetBrainsRuntime line 分目录，每个目录一个 `series` 文件：
 
-`jbr21-android-port.patch` is a single `git-format` patch that turns a pristine
-`JetBrains/JetBrainsRuntime` **`jbr21` @ `015db36dcaaf5fd670735a10b74dd413b190a40d`**
-(21.0.11) into the Android/bionic cross-build consumed by
-`scripts/03-configure.sh` … `scripts/05-package-jre.sh`.
+```
+patches/
+├── jbr21/
+│   ├── series                     # 补丁应用顺序
+│   └── jbr21-android-port.patch   # 单个合并补丁（相对 jbr21 pin 的完整 diff）
+└── jbr25/
+    ├── series
+    └── jbr25-android-port.patch   # 相对 jbr25 pin 的完整 diff（实验性）
+```
 
-It applies with `git apply` on top of the pin (verified in CI by
-`scripts/check-patch.sh`):
+`scripts/env.sh` 根据 `JBR_LINE` 选择目录（默认 21）。要新增一条 line：建
+`patches/jbr<N>/series` + 补丁，并在 `scripts/env.sh` 的 case 里加 pin/boot JDK。
+
+---
+
+## jbr21（已验证）
+
+对 `JetBrains/JetBrainsRuntime` **`jbr21` @ `015db36dcaaf5fd670735a10b74dd413b190a40d`**
+（21.0.11）的完整移植 diff，`git apply` 可干净应用：
 
 ```
  44 files changed, 978 insertions(+), 80 deletions(-)
 ```
 
-The series file lists it, so adding a future patch is a two-line change:
-drop `0002-*.patch` in here and append its name to `series`.
+来源层次：
 
-## Provenance
-
-| Layer | Source |
+| 层 | 来源 |
 |---|---|
-| Base tree | JetBrainsRuntime `jbr21` @ `015db36d` (21.0.11) |
-| Android/bionic port | `PojavLauncherTeam/android-openjdk-build-multiarch` @ `f3936fb`, branch `buildjre17-21`: `patches/jre_21/android/jdk21u_android.diff` + `patches/jre_21/android/26_skip_proc_net6_check.diff` |
-| Conflict resolution | 6 conflicting hunks resolved by hand when applying the Pojav diff to jbr21: `flags-cflags.m4`, `libraries.m4`, `JvmMapfile.gmk`, `Awt2dLibraries.gmk` (headless gate), `UnixNativeDispatcher.c`, `awt_LoadLibrary.c` |
-| Build-system fixes | `make/GenerateLinkOptData.gmk` + `HelloClasslist.java` (headless classlist dump), `Awt2dLibraries.gmk` (build `libfontmanager_xawt.so` in headless mode), `libraries.m4` (skip ALSA/DBus when `ANDROID_BUILD=1`) |
-| Runtime fixes | `os.cpp` (bionic C-heap pointer tagging vs aarch64 48-bit `movptr`; `TMPDIR`-aware temp dir; MTE heap-tag opt-out), `EncodingSupport_md.c` + `utf_util.c` (`codeset` `"ASCII"` → `"UTF-8"`), `os_linux.cpp` (`jvm_path` cache), `os_perf_linux.cpp` (`ifaddrs` allocation), `net_util_md.h` / `net_util_md.c` (`__ANDROID__`), `UnixNativeDispatcher.c`, `os_linux.cpp` `fork_and_exec` (`/system/bin/sh`) |
-| Patch-review follow-ups | see `docs/KNOWN-ISSUES.md`; the final revision removes all `JBR_DIAG` instrumentation |
+| 基础树 | JetBrainsRuntime `jbr21` @ `015db36d`（21.0.11） |
+| Android/bionic 移植 | `PojavLauncherTeam/android-openjdk-build-multiarch` @ `f3936fb`，`patches/jre_21/android/jdk21u_android.diff` + `26_skip_proc_net6_check.diff` |
+| 冲突处理 | 移植 diff 打到 jbr21 时的 6 个冲突 hunk 手工解决：`flags-cflags.m4`、`libraries.m4`、`JvmMapfile.gmk`、`Awt2dLibraries.gmk`、`UnixNativeDispatcher.c`、`awt_LoadLibrary.c` |
+| 构建系统修复 | `GenerateLinkOptData.gmk` + `HelloClasslist.java`（headless classlist）、`Awt2dLibraries.gmk`（headless 下构建 `libfontmanager_xawt.so`）、`libraries.m4`（`ANDROID_BUILD=1` 时跳过 ALSA/DBus） |
+| 运行时修复 | `os.cpp`（bionic tag untag/retag、`TMPDIR` 临时目录、MTE）、`EncodingSupport_md.c` + `utf_util.c`（UTF-8 codeset）、`os_linux.cpp`（`jvm_path`、`fork_and_exec`、`processor_id`）、`os_perf_linux.cpp`（`ifaddrs`）、`net_util_md.h`（`__ANDROID__`）、`awt_LoadLibrary.c`、`UnixNativeDispatcher.c` |
+| 评审跟进 | 见 `docs/KNOWN-ISSUES.md`；最终版移除了所有 `JBR_DIAG` 诊断代码 |
 
-## File composition (44)
+文件构成（44）：
 
-| Area | Files | What changes |
+| 区域 | 文件数 | 内容 |
 |---|---|---|
-| Build system (`make/`) | 20 | target triple, clang/lld/toolchain handling, android OS defines, `--hash-style=sysv`, headless-only tweaks, module gmk wiring |
-| HotSpot (`src/hotspot/`) | 14 | linux/posix/bionic OS layer, aarch64 thread-local helper, arm/arm32/x86 CPU files, ELF/global defines, `os::malloc/free/realloc` untag/retag, temp dir, MTE |
-| JDK native + Java (`src/java.base`, `java.desktop`, `java.instrument`, `jdk.jdwp.agent`) | 10 | bionic paths (`/system/bin/sh`, `/data/local/tmp`), net/proc checks, UTF-8 codeset in `libinstrument`/`libjdwp`, `awt_LoadLibrary.c` X11-toolkit probe |
+| 构建系统 `make/` | 20 | 目标三元组、clang/lld、android OS defines、`--hash-style=sysv`、headless 调整、模块 gmk 接线 |
+| HotSpot `src/hotspot/` | 14 | linux/posix/bionic OS 层、aarch64 thread-local、arm/arm32/x86 CPU 文件、ELF/全局宏、`os::malloc/free/realloc` untag/retag、临时目录、MTE |
+| JDK native/Java | 10 | bionic 路径（`/system/bin/sh`、`/data/local/tmp`）、net/proc 检查、`libinstrument`/`libjdwp` UTF-8、`awt_LoadLibrary.c` |
 
-## Regenerating after an edit
+---
 
-The official flow keeps `git diff` as the source of truth:
+## jbr25（实验性）
 
-```bash
-# 1. edit the patched tree (scripts/01 + scripts/02 already applied the series)
-$EDITOR work/JetBrainsRuntime/src/hotspot/...
+对 `jbr25` @ `1b5d5af9510803fdc84f14dc636282d6cd02a5aa`（2026-11-06）的完整 diff，
+`git apply` 可干净应用：
 
-# 2. regenerate the patch against the pin
-cd work/JetBrainsRuntime
-git diff 015db36dcaaf5fd670735a10b74dd413b190a40d > ../../patches/jbr21-android-port.patch
-
-# 3. prove it still applies to a pristine pin
-../../scripts/check-patch.sh
+```
+ 53 files changed, 1766 insertions(+), 100 deletions(-)   # 48 modified + 5 added
 ```
 
-`scripts/02-apply-patches.sh` commits the patched tree locally (author
-`AndroidJBR`), which is why HEAD is one commit ahead of `$JBR_PIN` during a
-normal build.
+状态：**补丁级验证通过（CI 矩阵），未构建、未真机验证**。补丁 sha256
+`6e054d098a997391956e04c4d0df99f5fb0ce82fcb316fb317349f85a458a167`。
 
-## Scope / caveats
+| 层 | 来源 |
+|---|---|
+| 基础树 | JetBrainsRuntime `jbr25` @ `1b5d5af9` |
+| Android/bionic 移植 | `AngelAuraMC/angelauramc-openjdk-build` 分支 `fcl/BUILD_JRE_25` 的 `patches/jdk25u_android.diff`（52 文件，sha256 `c9aa3e953f9abcf1f4b3b3ac2af92d1a33fca9349d5cca6c38c4b75db450119b`） |
+| 冲突处理 | 6 个冲突 hunk（4 个文件；基底文件是两段补丁拼接，`libraries.m4` 各自拒一次）手工解决：`make/autoconf/libraries.m4`、`make/modules/java.desktop/lib/ClientLibraries.gmk`、`src/hotspot/os/linux/os_linux.cpp`、`src/java.desktop/unix/native/libawt/awt/awt_LoadLibrary.c` |
+| AndroidJBR 修复集 | 从 jbr21 补丁逐条移植（headless classlist、headless 下 `libfontmanager_xawt.so`、`os.cpp` bionic tag/临时目录/MTE、UTF-8 codeset、`ifaddrs`、`jvm_path`/`fork_and_exec`/`processor_id`、`net_util_md.h`、`awt_LoadLibrary.c`、评审修复） |
+| 与 JDK 21 的结构差异 | `make/hotspot/lib/JvmMapfile.gmk` 在 25 中已移除；`make/modules/java.desktop/lib/Awt2dLibraries.gmk` 拆分为 `AwtLibraries.gmk` / `ClientLibraries.gmk` 等——补丁按新布局适配，未回填已删除文件 |
 
-- **Not a generic desktop-Linux patch.** It assumes this exact cross-build:
-  `TARGET_OS` stays `linux` (`make/autoconf/platform.m4` android branch is
-  deliberately ordered after `*linux*`), `--hash-style=sysv` and `-D__USE_BSD`
-  are applied globally because bionic's `linker64` needs them, and
-  `libraries.m4` skips ALSA/DBus only when `ANDROID_BUILD=1` is exported.
-- Conflicts with a newer JBR `jbr21` tip are expected as OpenJDK moves; pin
-  bumps are a deliberate, tested operation (`JBR_PIN` in `scripts/env.sh`).
-- The patch was produced and validated on an **aarch64 Linux host** (see
-  docs/BUILD.md); an x86_64 host follows the same flags but has not been
-  exercised end-to-end by this repo.
+构建注意：JBR 25 需要 Temurin **25.0.5+8** 作 boot JDK（`fetch-deps.sh` 会按
+line 自动选版本）。configure flag 与 21 相同（已核对 `--with-jvm-features` 名字在
+25 中仍有效），但**尚未实际跑过**；失败时按 `docs/BUILD.md` 第 9 节排查。
+
+---
+
+## 重新生成补丁（编辑后）
+
+```bash
+# 1. 在对应 line 的构建树里编辑（01 + 02 已把 series 应用成一次本地提交）
+$EDITOR work/JetBrainsRuntime-21/src/hotspot/...
+#    或 work/JetBrainsRuntime-25/...
+
+# 2. 相对 pin 重新生成
+cd work/JetBrainsRuntime-21
+git diff 015db36dcaaf5fd670735a10b74dd413b190a40d > ../../patches/jbr21/jbr21-android-port.patch
+cd ../JetBrainsRuntime-25
+git diff 1b5d5af9510803fdc84f14dc636282d6cd02a5aa > ../../patches/jbr25/jbr25-android-port.patch
+
+# 3. 证明仍能干净应用（不下载整棵树，约 5 秒）
+./scripts/check-patch.sh              # JBR 21
+JBR_LINE=25 ./scripts/check-patch.sh  # JBR 25
+```
+
+`scripts/02-apply-patches.sh` 会把应用后的树提交为一次本地 commit（作者
+`AndroidJBR`），所以正常构建期间 HEAD 比 `$JBR_PIN` 多一个提交。
+
+## 范围与限制
+
+- **不是通用桌面 Linux 补丁**：假定就是这套交叉构建——`TARGET_OS` 仍是 `linux`
+  （`make/autoconf/platform.m4` 的 android 分支故意排在 `*linux*` 之后），
+  `--hash-style=sysv`、`-D__USE_BSD` 全局生效（bionic `linker64` 需要），
+  `libraries.m4` 仅在 `ANDROID_BUILD=1` 时跳过 ALSA/DBus。
+- 上游漂移会导致冲突：升 pin 是"重新生成 + 重测"的显式操作。
+- jbr25 补丁目前只保证**可应用**；是否可构建、DCEVM 是否可用需实际构建验证
+  （见 README「支持矩阵」）。

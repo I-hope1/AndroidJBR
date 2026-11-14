@@ -5,12 +5,17 @@
 #
 #   source scripts/env.sh
 #
-# Nothing here is executed when the file is sourced.  Every path and version can
-# be overridden from the environment, which is how an existing toolchain tree is
-# reused instead of downloading everything again:
+# Pick the JetBrainsRuntime line with JBR_LINE (default 21):
+#
+#   ./scripts/build.sh              # JBR 21 (verified track)
+#   JBR_LINE=25 ./scripts/build.sh  # JBR 25 (experimental track)
+#
+# Nothing here is executed when the file is sourced.  Every path and version
+# can be overridden from the environment, which is how an existing toolchain
+# tree is reused instead of downloading everything again:
 #
 #   WORK=/srv/androidjbr-work ./scripts/build.sh
-#   NDK=/opt/android-ndk-r27c BOOT_JDK=/opt/jdk-21.0.13+9 ./scripts/03-configure.sh
+#   NDK=/opt/android-ndk-r27c BOOT_JDK=/opt/jdk-21.0.13+9 ./scripts/build.sh
 #
 # See docs/BUILD.md for the full dependency story.
 
@@ -21,11 +26,45 @@ export WORK=${WORK:-$ANDROIDJBR_HOME/work}
 export OUT=${OUT:-$ANDROIDJBR_HOME/out}
 unset _androidjbr_script_dir
 
-# --- upstream pins (fixed on purpose — do not float) ------------------------
-export JBR_REPO=${JBR_REPO:-https://github.com/JetBrains/JetBrainsRuntime.git}
-export JBR_BRANCH=${JBR_BRANCH:-jbr21}
-export JBR_PIN=${JBR_PIN:-015db36dcaaf5fd670735a10b74dd413b190a40d}
+# --- JBR line selection ------------------------------------------------------
+# Each line pins: upstream branch + commit, boot JDK version, patch directory.
+export JBR_LINE=${JBR_LINE:-21}
 
+_jbr_line_ok=0
+_jbr_branch=
+_jbr_pin=
+_jdk_major=
+_boot_jdk_version=
+case "$JBR_LINE" in
+  21)
+    _jbr_line_ok=1
+    _jbr_branch=jbr21
+    _jbr_pin=015db36dcaaf5fd670735a10b74dd413b190a40d
+    _jdk_major=21
+    _boot_jdk_version=21.0.13+9
+    ;;
+  25)
+    _jbr_line_ok=1
+    _jbr_branch=jbr25
+    _jbr_pin=1b5d5af9510803fdc84f14dc636282d6cd02a5aa
+    _jdk_major=25
+    _boot_jdk_version=25.0.5+8
+    ;;
+esac
+export JBR_LINE_OK=$_jbr_line_ok
+export JDK_MAJOR=${JDK_MAJOR:-$_jdk_major}
+
+export JBR_REPO=${JBR_REPO:-https://github.com/JetBrains/JetBrainsRuntime.git}
+export JBR_BRANCH=${JBR_BRANCH:-$_jbr_branch}
+export JBR_PIN=${JBR_PIN:-$_jbr_pin}
+export BOOT_JDK_VERSION=${BOOT_JDK_VERSION:-$_boot_jdk_version}
+unset _jbr_branch _jbr_pin _jdk_major _boot_jdk_version _jbr_line_ok
+
+# Patch set for the selected line — see patches/jbr<N>/series.
+export PATCH_DIR=${PATCH_DIR:-$ANDROIDJBR_HOME/patches/jbr$JBR_LINE}
+export PATCH_SERIES=${PATCH_SERIES:-$PATCH_DIR/series}
+
+# --- other upstream pins (fixed on purpose — do not float) ------------------
 export POJAV_REPO=${POJAV_REPO:-https://github.com/PojavLauncherTeam/android-openjdk-build-multiarch.git}
 export POJAV_BRANCH=${POJAV_BRANCH:-buildjre17-21}
 export POJAV_PIN=${POJAV_PIN:-f3936fba6fcf14f45202c5dd8d2d8179dde051b2}
@@ -37,7 +76,6 @@ export ELFC_PIN=${ELFC_PIN:-f9273bcb37bf4c187123438566657fa5ac40cd51}
 export NDK_VERSION=${NDK_VERSION:-27c}
 export NDK_URL=${NDK_URL:-https://dl.google.com/android/repository/android-ndk-r${NDK_VERSION}-linux.zip}
 
-export BOOT_JDK_VERSION=${BOOT_JDK_VERSION:-21.0.13+9}
 _temurin_arch=
 case "$(uname -m)" in
   aarch64 | arm64) _temurin_arch=aarch64 ;;
@@ -45,8 +83,8 @@ case "$(uname -m)" in
 esac
 if [ -n "${TEMURIN_URL:-}" ]; then
   : # caller supplied an explicit URL
-elif [ -n "$_temurin_arch" ]; then
-  TEMURIN_URL="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_${_temurin_arch}_linux_hotspot_21.0.13_9.tar.gz"
+elif [ -n "${JDK_MAJOR:-}" ] && [ -n "$_temurin_arch" ]; then
+  TEMURIN_URL="https://github.com/adoptium/temurin${JDK_MAJOR}-binaries/releases/download/jdk-${BOOT_JDK_VERSION/+/%2B}/OpenJDK${JDK_MAJOR}U-jdk_${_temurin_arch}_linux_hotspot_${BOOT_JDK_VERSION/+/_}.tar.gz"
 else
   TEMURIN_URL=""
 fi
@@ -89,7 +127,8 @@ export CUPS_SRC=${CUPS_SRC:-$WORK/cups-${CUPS_VERSION}}
 export POJAV_BUILD=${POJAV_BUILD:-$WORK/android-openjdk-build-multiarch}
 export ELFC=${ELFC:-$WORK/bin/elf-cleaner}
 
-export JBR_SRC=${JBR_SRC:-$WORK/JetBrainsRuntime}
+# One source tree per JBR line so several lines can be built side by side.
+export JBR_SRC=${JBR_SRC:-$WORK/JetBrainsRuntime-${JBR_LINE}}
 export BUILD_DIR=${BUILD_DIR:-$JBR_SRC/build/linux-${TARGET_JDK}-${JVM_VARIANTS}-${DEBUG_LEVEL}}
 
 # Host LLVM used as the cross compiler.  On Ubuntu 24.04 with the clang-18 /
@@ -114,5 +153,5 @@ export DUMMY_LIBS=${DUMMY_LIBS:-$JBR_SRC/dummy_libs}
 
 # --- build knobs -------------------------------------------------------------
 export JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
-export BUILD_LOG=${BUILD_LOG:-$WORK/build.log}
-export CONFIGURE_LOG=${CONFIGURE_LOG:-$WORK/configure.log}
+export BUILD_LOG=${BUILD_LOG:-$WORK/build-jbr${JBR_LINE}.log}
+export CONFIGURE_LOG=${CONFIGURE_LOG:-$WORK/configure-jbr${JBR_LINE}.log}

@@ -13,6 +13,7 @@ source "$_script_dir/env.sh"
 # shellcheck source=lib.sh
 source "$_script_dir/lib.sh"
 
+require_jbr_line
 need_dir "$JBR_SRC" "run 01/02 first"
 need_dir "$JBR_SRC/.git" "run 01/02 first"
 need_file "$JBR_SRC/configure"
@@ -21,16 +22,20 @@ need_dir "$FREETYPE_PREFIX/include/freetype2" "run ./scripts/setup-toolchain.sh 
 need_dir "$CUPS_SRC" "run ./scripts/fetch-deps.sh first"
 need_dir "$DUMMY_LIBS" "run ./scripts/02-apply-patches.sh first"
 
-# --- sanity: series must be applied -----------------------------------------
-if ! git -C "$JBR_SRC" apply --reverse --check --whitespace=nowarn \
-     "$ANDROIDJBR_HOME/patches/jbr21-android-port.patch" 2>/dev/null; then
-  die "the port patch is not applied in $JBR_SRC — run ./scripts/02-apply-patches.sh first"
-fi
+# --- sanity: the whole series must be applied -------------------------------
+while IFS= read -r line; do
+  line=${line%%#*}
+  line=$(printf '%s' "$line" | xargs)
+  [ -n "$line" ] || continue
+  git -C "$JBR_SRC" apply --reverse --check --whitespace=nowarn \
+    "$PATCH_DIR/$line" 2>/dev/null \
+    || die "patch not applied in $JBR_SRC: $line — run ./scripts/02-apply-patches.sh first"
+done < "$PATCH_SERIES"
 
 extra_cflags="-DLE_STANDALONE -O3 -DANDROID -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
 extra_ldflags="-L$DUMMY_LIBS -Wl,--undefined-version"
 
-info "configuring (target $ANDROID_TARGET$ANDROID_API, headless, server VM)"
+info "configuring JBR $JBR_LINE (target $ANDROID_TARGET$ANDROID_API, headless, server VM)"
 rm -rf "$JBR_SRC/build"
 (
   cd "$JBR_SRC"

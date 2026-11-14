@@ -3,6 +3,9 @@
 产物是 **bionic aarch64** 的 JRE，只能用于 Android arm64 设备（API 21+）。
 x86_64 / arm32 设备或桌面 JVM 不能使用。
 
+> 当前已发布产物是 **JBR 21（21.0.11）**。JBR 25 轨道是实验性的：补丁可应用，
+> 但还没有构建出产物，也没有真机验证记录；下面的步骤在 JBR 25 产物出现后同样适用。
+
 ## 1. 产物
 
 从 [Releases](https://github.com/I-hope1/AndroidJBR/releases) 下载：

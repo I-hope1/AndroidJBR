@@ -1,0 +1,3 @@
+# AndroidJBR series — JBR 25 (jbr25 @ 1b5d5af9510803fdc84f14dc636282d6cd02a5aa)
+# Everything needed to cross-build JetBrainsRuntime for Android arm64 (headless, server VM).
+jbr25-android-port.patch

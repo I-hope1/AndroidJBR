@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AndroidJBR — verify that patches/series applies cleanly to the pinned JBR
+# AndroidJBR — verify that patches/jbr<N>/series applies cleanly to the pinned JBR
 # tree, without downloading or building the whole JDK.
 #
 #   ./scripts/check-patch.sh              # temporary checkout, auto-removed
@@ -19,13 +19,12 @@ source "$_script_dir/env.sh"
 # shellcheck source=lib.sh
 source "$_script_dir/lib.sh"
 
-PATCH_DIR="$ANDROIDJBR_HOME/patches"
-SERIES="$PATCH_DIR/series"
 keep=0
 [ "${1:-}" = "--keep" ] && keep=1
 
 need_cmd git
-need_file "$SERIES"
+require_jbr_line
+SERIES="$PATCH_SERIES"
 
 patch_files=()
 while IFS= read -r line; do
@@ -33,19 +32,29 @@ while IFS= read -r line; do
   line=$(printf '%s' "$line" | xargs)
   [ -n "$line" ] || continue
   p="$PATCH_DIR/$line"
-  need_file "$p" "listed in patches/series"
+  need_file "$p" "listed in $SERIES"
   patch_files+=("$p")
 done < "$SERIES"
-[ "${#patch_files[@]}" -gt 0 ] || die "patches/series is empty"
+[ "${#patch_files[@]}" -gt 0 ] || die "$SERIES is empty"
 
-# Every file any patch touches, deduplicated and sorted.
-touched=$(mktemp)
-trap 'rm -f "$touched"' EXIT
+# Every path the patches touch (both sides, for the sparse checkout) and the
+# subset that must already exist upstream (preimages only — patches may add new
+# files, which are absent on purpose).
+touched=$(mktemp); required=$(mktemp)
+trap 'rm -f "$touched" "$required"' EXIT
 for p in "${patch_files[@]}"; do
-  grep '^diff --git ' "$p" | sed -E 's#^diff --git a/(.*) b/.*#\1#'
-done | sort -u > "$touched"
-n_files=$(wc -l < "$touched")
-info "${#patch_files[@]} patch(es), $n_files touched file(s), JBR pin ${JBR_PIN:0:12}"
+  awk '/^diff --git / {
+         a = $3; sub(/^a\//, "", a)
+         b = $4; sub(/^b\//, "", b)
+         print a; print b
+       }' "$p"
+done | sort -u | grep -v '^/dev/null$' > "$touched"
+for p in "${patch_files[@]}"; do
+  awk '/^--- a\// { sub(/^--- a\//, ""); print }' "$p"
+done | sort -u > "$required"
+n_files=$(wc -l < "$touched")      # every file the series creates or changes
+n_preimages=$(wc -l < "$required")  # files that must exist before applying
+info "JBR $JBR_LINE: ${#patch_files[@]} patch(es), $n_files touched file(s), pin ${JBR_PIN:0:12}"
 
 chk=$(mktemp -d "${TMPDIR:-/tmp}/androidjbr-patch-check.XXXXXX")
 cleanup() {
@@ -72,7 +81,7 @@ git -C "$chk" cat-file -e "${JBR_PIN}^{commit}" \
   || die "commit $JBR_PIN not present after fetch"
 
 # --- materialise only the patched files -------------------------------------
-info "sparse checkout of $n_files file(s)"
+info "sparse checkout of $n_files file(s) ($n_preimages with an upstream preimage)"
 git -C "$chk" sparse-checkout init --no-cone
 git -C "$chk" sparse-checkout set --no-cone --stdin < "$touched"
 git -C "$chk" -c advice.detachedHead=false checkout --quiet "$JBR_PIN"
@@ -80,7 +89,7 @@ git -C "$chk" -c advice.detachedHead=false checkout --quiet "$JBR_PIN"
 missing=0
 while IFS= read -r f; do
   [ -e "$chk/$f" ] || { warn "not present in upstream tree: $f"; missing=$((missing + 1)); }
-done < "$touched"
+done < "$required"
 [ "$missing" -eq 0 ] || die "$missing patched path(s) do not exist in the pinned tree — patch/pin mismatch"
 
 # --- dry-run, then apply -----------------------------------------------------
@@ -94,9 +103,11 @@ for p in "${patch_files[@]}"; do
   git -C "$chk" apply --whitespace=nowarn "$p" || die "apply failed: $(basename "$p")"
 done
 
-changed=$(git -C "$chk" diff --numstat | wc -l)
+# Count everything the series changed, including files it created.
+git -C "$chk" add -A
+changed=$(git -C "$chk" diff --cached --numstat | wc -l)
 [ "$changed" -eq "$n_files" ] \
   || die "expected $n_files changed files after applying the series, got $changed"
 
 info "OK — $n_files files changed"
-git -C "$chk" diff --stat | tail -n 1
+git -C "$chk" diff --cached --stat | tail -n 1

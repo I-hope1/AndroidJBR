@@ -15,20 +15,26 @@ concurrency:
 
 jobs:
   patch-check:
-    name: patch series applies to JBR pin
+    name: patch series applies to JBR ${{ matrix.line }} pin
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        line: ["21", "25"]
+    env:
+      JBR_LINE: ${{ matrix.line }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Show pin / series
         run: |
-          grep -E '^(export )?(JBR_PIN|JBR_BRANCH)=' scripts/env.sh
-          cat patches/series
+          grep -E '^(export )?(JBR_PIN|JBR_BRANCH)=' scripts/env.sh | head -5
+          cat "patches/jbr${JBR_LINE}/series"
 
       - name: Verify patches apply on the pinned JetBrainsRuntime tree
-        # Blob-less partial clone + sparse checkout: only the 44 files the
-        # patches touch are materialised (~15 MB, a few seconds).
+        # Blob-less partial clone + sparse checkout: only the files the patches
+        # touch are materialised (~15 MB, a few seconds).
         run: ./scripts/check-patch.sh
 
   shell:

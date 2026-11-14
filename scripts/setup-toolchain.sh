@@ -16,6 +16,7 @@ source "$_script_dir/env.sh"
 source "$_script_dir/lib.sh"
 
 need_cmd make
+require_jbr_line
 need_cmd cmake "needed to build termux-elf-cleaner"
 need_cmd sha256sum
 

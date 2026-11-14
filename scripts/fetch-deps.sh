@@ -14,6 +14,7 @@ source "$_script_dir/env.sh"
 source "$_script_dir/lib.sh"
 
 sources_only=0
+require_jbr_line
 [ "${1:-}" = "--sources" ] && sources_only=1
 
 mkdir -p "$WORK" "$OUT"

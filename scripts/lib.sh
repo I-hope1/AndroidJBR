@@ -27,6 +27,13 @@ need_dir() {
   [ -d "$1" ] || die "required directory not found: $1${2:+ — $2}"
 }
 
+# require_jbr_line: validate JBR_LINE early with a list of supported lines.
+require_jbr_line() {
+  [ "${JBR_LINE_OK:-0}" = "1" ] \
+    || die "unsupported JBR_LINE='${JBR_LINE:-}' (supported: 21, 25) — see README / scripts/env.sh"
+  need_file "$PATCH_SERIES" "no patch series for JBR $JBR_LINE (expected $PATCH_SERIES)"
+}
+
 # require_toolchain: fail fast with actionable advice when the cross toolchain
 # is incomplete.
 require_toolchain() {
@@ -153,7 +160,9 @@ print_summary() {
   ANDROIDJBR_HOME = $ANDROIDJBR_HOME
   WORK            = $WORK
   OUT             = $OUT
-  JBR_SRC         = $JBR_SRC ($JBR_BRANCH @ $JBR_PIN)
+  JBR line        = $JBR_LINE (branch $JBR_BRANCH @ $JBR_PIN, boot JDK $BOOT_JDK_VERSION)
+  patch series    = $PATCH_SERIES
+  JBR_SRC         = $JBR_SRC
   NDK             = $NDK
   BOOT_JDK        = $BOOT_JDK
   FREETYPE        = $FREETYPE_PREFIX
