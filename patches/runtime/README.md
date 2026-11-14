@@ -19,3 +19,16 @@ Replaces the DCEVM enhanced-redefinition compile-drain loop:
 Validation (fastdebug aarch64 build, JBR 25.0.5 + Android port tree):
 `docs/deopt/P0-VERIFICATION.md`. Patch applies to a pristine `jbr25` tree
 (`git apply --check` verified).
+
+## p1-instrumentation.patch
+
+Diagnostic only (apply on top of p0-notify-wait-v4.patch): while the enhanced
+redefinition drain waits, log the in-flight C2 phase of every compiler thread
+(thread, method, level, OSR bci, innermost `Compile::TracePhase` name, time in
+phase) plus the total drain duration. Enabled with `-Xlog:redefine+class=info`;
+threshold via `-XX:DcevmDrainDumpThreshold` (default 50 ms).
+
+Measured on the synthetic long-C2 workload: drains 124-1281 ms (fastdebug), and
+the in-flight time concentrates in the Chaitin/register-allocation pipeline and
+`optimizer`, so P1 cancellation points have to be sunk into those inner loops.
+See `docs/deopt/P1-INSTRUMENTATION.md`.

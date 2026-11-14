@@ -1,0 +1,298 @@
+diff --git a/src/hotspot/share/compiler/compileBroker.cpp b/src/hotspot/share/compiler/compileBroker.cpp
+index f7edd90e9..b640fd9fc 100644
+--- a/src/hotspot/share/compiler/compileBroker.cpp
++++ b/src/hotspot/share/compiler/compileBroker.cpp
+@@ -69,6 +69,7 @@
+ #include "runtime/threads.hpp"
+ #include "runtime/threadSMR.hpp"
+ #include "runtime/timerTrace.hpp"
++#include "runtime/thread.hpp"
+ #include "runtime/vframe.inline.hpp"
+ #include "runtime/vmOperations.hpp"
+ #include "utilities/debug.hpp"
+@@ -2974,9 +2975,47 @@ void CompileBroker::print_heapinfo(outputStream* out, const char* function, size
+ // safepoint-safe: it is stopped at a safepoint like any other JavaThread, so
+ // pending safepoints complete, compiler threads can make progress, and the wait
+ // is notified as soon as the last in-flight compilation finishes.
++void CompileBroker::dumpInFlightCompilations() {
++  jlong now = os::javaTimeNanos();
++  class Dumper : public ThreadClosure {
++    jlong _now;
++   public:
++    explicit Dumper(jlong now) : _now(now) {}
++    void do_thread(Thread* t) override {
++      if (t == nullptr || !t->is_Compiler_thread()) {
++        return;
++      }
++      CompilerThread* ct = static_cast<CompilerThread*>(t);
++      // Keep the task in a local: the compiler thread may complete and clear it.
++      CompileTask* task = ct->task();
++      if (task == nullptr) {
++        return;
++      }
++      const char* phase = ct->current_phase_name();
++      jlong phase_start_ns = ct->current_phase_start_ns();
++      jlong phase_ms = (phase != nullptr && phase_start_ns > 0) ? (_now - phase_start_ns) / (1000 * 1000) : -1;
++      ResourceMark rm;
++      log_info(redefine, class)
++          ("in-flight compilation: thread='%s' method='%s' level=%d osr_bci=%d phase='%s' phase_ms=" JLONG_FORMAT
++           " (phase_ms=-1 <=> C1 or between C2 phases)",
++           ct->name(), task->method()->name_and_sig_as_C_string(), task->comp_level(),
++           task->osr_bci(), phase != nullptr ? phase : "(between-phases)", phase_ms);
++    }
++  } dumper(now);
++  // ThreadClosure iteration requires Threads_lock (and it also keeps the task's
++  // Method alive while we print it).
++  MutexLocker tl(Threads_lock);
++  Threads::threads_do(&dumper);
++}
++
+ void CompileBroker::drainCompilationsForEnhancedRedefinition() {
+   assert(JavaThread::current()->thread_state() == _thread_in_vm, "must be in VM state");
+-  MonitorLocker wait_ml(DcevmCompilationWait_lock);
++  // NOTE: elapsedTimer::milliseconds() only returns the accumulated time after
++  // stop(), so use monotonic nanos for the running measurement.
++  const jlong drain_start_ns = os::javaTimeNanos();
++  const bool log_drain = log_is_enabled(Info, redefine, class);
++  jlong last_dump_ms = 0;
++
+   while (Atomic::load(&_active_compilations) > 0) {
+     // During VM shutdown compiler threads are parked by maybe_block() and may
+     // never decrement _active_compilations. Don't hang a shutdown path that is
+@@ -2984,9 +3023,38 @@ void CompileBroker::drainCompilationsForEnhancedRedefinition() {
+     if (_should_block || VM_Exit::vm_exited()) {
+       return;
+     }
+-    // The timeout is only a safety net (lost wakeup, compiler thread exiting
+-    // unexpectedly); it is not the normal wakeup path.
+-    wait_ml.wait(1000);
++
++    // Attribute slow drains to a C2 phase: only report drains longer than
++    // DcevmDrainDumpThreshold ms and at most every 100 ms. The in-flight
++    // compile is sampled from the compiler thread, so the phase name is the
++    // innermost TracePhase (iterGVN, idealLoop, escapeAnalysis, regalloc, ...)
++    // or "(between-phases)". In fastdebug the absolute phase_ms values are
++    // inflated by IR verification; the phase/drain shape is what matters.
++    if (log_drain) {
++      const jlong elapsed_ms = (os::javaTimeNanos() - drain_start_ns) / (1000 * 1000);
++      if (elapsed_ms >= DcevmDrainDumpThreshold &&
++          (last_dump_ms == 0 || elapsed_ms - last_dump_ms >= 100)) {
++        last_dump_ms = elapsed_ms;
++        dumpInFlightCompilations();
++      }
++    }
++
++    // Re-check under the monitor: a compiler thread that dropped
++    // _active_compilations to zero notifies the same monitor, so this cannot
++    // miss the wakeup.
++    MonitorLocker wait_ml(DcevmCompilationWait_lock);
++    if (Atomic::load(&_active_compilations) > 0) {
++      // The timeout is only a safety net (lost wakeup, compiler thread exiting
++      // unexpectedly); it is not the normal wakeup path.
++      wait_ml.wait(100);
++    }
++  }
++
++  if (log_drain) {
++    const jlong elapsed_ms = (os::javaTimeNanos() - drain_start_ns) / (1000 * 1000);
++    if (elapsed_ms >= DcevmDrainDumpThreshold) {
++      log_info(redefine, class)("compilation drain finished after " JLONG_FORMAT " ms", elapsed_ms);
++    }
+   }
+ }
+ 
+diff --git a/src/hotspot/share/compiler/compileBroker.hpp b/src/hotspot/share/compiler/compileBroker.hpp
+index 11a81e6f9..af4bc3eca 100644
+--- a/src/hotspot/share/compiler/compileBroker.hpp
++++ b/src/hotspot/share/compiler/compileBroker.hpp
+@@ -464,6 +464,8 @@ class CompileBroker: AllStatic {
+   // gate was closed has finished. Must be called with the gate closed and in
+   // VM state (the wait uses a safepoint-checked monitor).
+   static void drainCompilationsForEnhancedRedefinition();
++  // P1 instrumentation: log where each in-flight C2 compilation currently is.
++  static void dumpInFlightCompilations();
+ };
+ 
+ // RAII guard for the "compilation stopped" window of an enhanced class
+diff --git a/src/hotspot/share/compiler/compilerThread.cpp b/src/hotspot/share/compiler/compilerThread.cpp
+index 4034e63bc..c844cc66b 100644
+--- a/src/hotspot/share/compiler/compilerThread.cpp
++++ b/src/hotspot/share/compiler/compilerThread.cpp
+@@ -24,6 +24,7 @@
+ 
+ #include "compiler/compileBroker.hpp"
+ #include "compiler/compilerThread.hpp"
++#include "opto/compile.hpp"
+ #include "compiler/compileTask.hpp"
+ #include "runtime/javaThread.inline.hpp"
+ 
+@@ -34,6 +35,7 @@ CompilerThread::CompilerThread(CompileQueue* queue,
+   _env   = nullptr;
+   _log   = nullptr;
+   _task  = nullptr;
++  _current_compile = nullptr;
+   _queue = queue;
+   _counters = counters;
+   _buffer_blob = nullptr;
+@@ -71,3 +73,15 @@ void CompilerThread::thread_entry(JavaThread* thread, TRAPS) {
+ bool CompilerThread::is_hidden_from_external_view() const {
+   return _compiler == nullptr || _compiler->is_hidden_from_external_view();
+ }
++
++// P1 instrumentation: innermost C2 phase running on this thread (nullptr when
++// the thread is compiling with C1 or is between C2 phases).
++const char* CompilerThread::current_phase_name() const {
++  Compile* c = _current_compile;
++  return c != nullptr ? c->current_phase_name() : nullptr;
++}
++
++jlong CompilerThread::current_phase_start_ns() const {
++  Compile* c = _current_compile;
++  return c != nullptr ? c->current_phase_start_ns() : 0;
++}
+diff --git a/src/hotspot/share/compiler/compilerThread.hpp b/src/hotspot/share/compiler/compilerThread.hpp
+index e20e3017d..fcda7f829 100644
+--- a/src/hotspot/share/compiler/compilerThread.hpp
++++ b/src/hotspot/share/compiler/compilerThread.hpp
+@@ -31,6 +31,7 @@ class AbstractCompiler;
+ class ArenaStatCounter;
+ class BufferBlob;
+ class ciEnv;
++class Compile;
+ class CompilerThread;
+ class CompileLog;
+ class CompileTask;
+@@ -48,6 +49,9 @@ class CompilerThread : public JavaThread {
+   ciEnv*                _env;
+   CompileLog*           _log;
+   CompileTask* volatile _task;  // print_threads_compiling can read this concurrently.
++  // P1 instrumentation: C2 compilation currently running on this thread (set
++  // from Compile::TracePhase, read by CompileBroker::dumpInFlightCompilations).
++  Compile* _current_compile;
+   CompileQueue*         _queue;
+   BufferBlob*           _buffer_blob;
+   bool                  _can_call_java;
+@@ -88,6 +92,12 @@ class CompilerThread : public JavaThread {
+   void set_arenastat(ArenaStatCounter* v)        { _arena_stat = v; }
+ 
+   // Get/set the thread's compilation environment.
++  Compile*      current_compile() const          { return _current_compile; }
++  void          set_current_compile(Compile* c)  { _current_compile = c; }
++  // Innermost C2 phase running on this thread, or nullptr (C1 / between phases).
++  const char*   current_phase_name() const;
++  jlong         current_phase_start_ns() const;
++
+   ciEnv*        env()                            { return _env; }
+   void          set_env(ciEnv* env)              { _env = env; }
+ 
+diff --git a/src/hotspot/share/opto/compile.cpp b/src/hotspot/share/opto/compile.cpp
+index 1c209a646..b0442e4f2 100644
+--- a/src/hotspot/share/opto/compile.cpp
++++ b/src/hotspot/share/opto/compile.cpp
+@@ -32,6 +32,7 @@
+ #include "compiler/compilationFailureInfo.hpp"
+ #include "compiler/compilationMemoryStatistic.hpp"
+ #include "compiler/compileBroker.hpp"
++#include "compiler/compilerThread.hpp"
+ #include "compiler/compileLog.hpp"
+ #include "compiler/compilerDefinitions.hpp"
+ #include "compiler/compilerOracle.hpp"
+@@ -4430,10 +4431,30 @@ Compile::TracePhase::TracePhase(const char* name, PhaseTraceId id)
+   : TraceTime(name, &Phase::timers[id], CITime, CITimeVerbose),
+     _compile(Compile::current()),
+     _log(nullptr),
+-    _dolog(CITimeVerbose)
++    _dolog(CITimeVerbose),
++    _saved_phase_name(nullptr),
++    _saved_phase_start_ns(0),
++    _saved_compile(nullptr)
+ {
+   assert(_compile != nullptr, "sanity check");
+   assert(id != PhaseTraceId::_t_none, "Don't use none");
++
++  // P1 instrumentation: publish the current phase and compilation to the broker
++  // so that a blocked enhanced redefinition can report where the in-flight C2
++  // compilation is spending its time (see CompileBroker::dumpInFlightCompilations).
++  CompilerThread* ct = CompilerThread::current();
++  if (ct != nullptr) {
++    _saved_compile = ct->current_compile();
++    ct->set_current_compile(_compile);
++  }
++  _saved_phase_name = const_cast<const char*>(_compile->_current_phase_name);
++  _saved_phase_start_ns = _compile->_current_phase_start_ns;
++  // Some trace ids (e.g. _t_vector, _t_renumberLive) have no name: keep the
++  // enclosing named phase visible instead of reporting an empty phase.
++  if (name != nullptr && name[0] != '\0') {
++    _compile->_current_phase_name = name;
++    _compile->_current_phase_start_ns = os::javaTimeNanos();
++  }
+   if (_dolog) {
+     _log = _compile->log();
+   }
+@@ -4453,6 +4474,13 @@ Compile::TracePhase::TracePhase(PhaseTraceId id)
+   : TracePhase(Phase::get_phase_trace_id_text(id), id) {}
+ 
+ Compile::TracePhase::~TracePhase() {
++  // P1 instrumentation: restore the enclosing phase / compilation.
++  CompilerThread* ct = CompilerThread::current();
++  if (ct != nullptr) {
++    ct->set_current_compile(_saved_compile);
++  }
++  _compile->_current_phase_name = _saved_phase_name;
++  _compile->_current_phase_start_ns = _saved_phase_start_ns;
+ 
+   // Inform memory statistic, if enabled
+   if (CompilationMemoryStatistic::enabled()) {
+diff --git a/src/hotspot/share/opto/compile.hpp b/src/hotspot/share/opto/compile.hpp
+index 134b930ad..cb7d9d9ae 100644
+--- a/src/hotspot/share/opto/compile.hpp
++++ b/src/hotspot/share/opto/compile.hpp
+@@ -239,6 +239,10 @@ class Compile : public Phase {
+     Compile* const _compile;
+     CompileLog* _log;
+     const bool _dolog;
++    // P1 instrumentation: state to restore when leaving this phase.
++    const char* _saved_phase_name;
++    jlong _saved_phase_start_ns;
++    Compile* _saved_compile;
+    public:
+     TracePhase(PhaseTraceId phaseTraceId);
+     TracePhase(const char* name, PhaseTraceId phaseTraceId);
+@@ -369,6 +373,12 @@ class Compile : public Phase {
+   DirectiveSet*         _directive;             // Compiler directive
+   CompileLog*           _log;                   // from CompilerThread
+   CHeapStringHolder     _failure_reason;        // for record_failure/failing pattern
++
++  // P1 instrumentation: innermost TracePhase currently executing on this
++  // Compile. Read (racy but benign) by the enhanced redefinition drain path to
++  // attribute long compilation stalls to a phase. nullptr: between phases.
++  volatile const char* _current_phase_name = nullptr;
++  volatile jlong       _current_phase_start_ns = 0;
+   CompilationFailureInfo* _first_failure_details; // Details for the first failure happening during compilation
+   GrowableArray<CallGenerator*> _intrinsics;    // List of intrinsics.
+   GrowableArray<Node*>  _macro_nodes;           // List of nodes which need to be expanded before matching.
+@@ -807,6 +817,9 @@ class Compile : public Phase {
+            _failure_reason.get() != nullptr;
+   }
+ 
++  const char* current_phase_name() const       { return const_cast<const char*>(_current_phase_name); }
++  jlong       current_phase_start_ns() const   { return _current_phase_start_ns; }
++
+   const char* failure_reason() const {
+     return _env->failing() ? _env->failure_reason()
+                            : _failure_reason.get();
+diff --git a/src/hotspot/share/runtime/globals.hpp b/src/hotspot/share/runtime/globals.hpp
+index e1bd68fbb..ed826229f 100644
+--- a/src/hotspot/share/runtime/globals.hpp
++++ b/src/hotspot/share/runtime/globals.hpp
+@@ -2033,6 +2033,10 @@ const int ObjectAlignmentInBytes = 8;
+   product(bool, OptimizeCodeFlush, false,                                   \
+           "Optimize code flush after enhanced class redefinition "          \
+           "by invalidating only affected code")                             \
++                                                                             \
++  product(int, DcevmDrainDumpThreshold, 50,                               \
++           "Log in-flight compilation phases when an enhanced redefinition " \
++           "drain wait exceeds this many milliseconds")                      \
+                                                                             \
+   product(ccstr, HotswapAgent, "disabled",                                  \
+           "Specify HotswapAgent image to be used."                          \
