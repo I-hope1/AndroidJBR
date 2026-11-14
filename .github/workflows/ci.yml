@@ -16,7 +16,7 @@ concurrency:
 jobs:
   patch-check:
     name: patch series applies to JBR ${{ matrix.line }} pin
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -25,7 +25,7 @@ jobs:
     env:
       JBR_LINE: ${{ matrix.line }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show pin / series
         run: |
@@ -39,10 +39,10 @@ jobs:
 
   shell:
     name: shellcheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install shellcheck if missing
         run: |
@@ -60,10 +60,10 @@ jobs:
 
   scripts-static:
     name: scripts fail fast with clear errors
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Help output works without any dependencies
         run: ./scripts/build.sh --help

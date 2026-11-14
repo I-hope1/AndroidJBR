@@ -37,7 +37,7 @@ jobs:
       JBR_LINE: ${{ inputs.jbr }}
       JOBS: ${{ inputs.jobs }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check host dependencies
         run: |
@@ -70,7 +70,7 @@ jobs:
           grep -E '^(JAVA_VERSION|OS_ARCH)=' /tmp/jre-check/release
 
       - name: Upload JRE artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jre${{ inputs.jbr }}-jbr-android-${{ github.run_number }}
           path: |
