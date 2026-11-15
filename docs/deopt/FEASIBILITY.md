@@ -21,6 +21,7 @@
 - **真实 Remold（CI 内测版 agent）实测完成**（`REAL-REMOLD-BENCH.md`）：JBR 25 release 补丁组 vs 未打补丁 JBR 25.0.4.1，Remold example 应用 12 轮结构性两阶段热更：**ForceSafepoint 23 → 0**，批次 `total` p50 **177 → 155 ms**、mean **225 → 184 ms**；剩余离群批次由 Remold 侧实例字段回填（`patch` max 342–406 ms）主导，JIT 排空已无贡献 → 瓶颈如预期转移到 Remold 自身。
   - 补丁栈已整理：**生产用 `p0-notify-wait-v4` + `p1-cancellation-standalone`**（已用 `git apply --check` 验证在干净 P0 上直接可应用，无 instrumentation 依赖）。
 
+- **P2 方向 A/B（真实 Remold，`-Xlog:redefine+class*=info,gc=info`）**（`P2-FLUSH-AB.md`）：每批次 2 个 enhanced-redefine VM op（各 43–49 ms）+ JVMTI 准备 = 118–125 ms redefine；op 内 `flush_dependent_code` 仅 **0–2 ms**，`cpool` ~9 ms、堆遍历/实例更新 12–13 ms、**Heap Inspection Full GC 18–21 ms（≈40%）**。`-XX:+OptimizeCodeFlush` 按设计把 deopt 集合从 all 变 dependent，但 redefine 不变（118.5→124.5 ms，噪声）；其收益在代码缓存保留：worker 吞吐 mean **+5%**、最差 2 s 窗口 **+13%**。剩余 113 ms 是结构性重定义（字段布局变化→实例尺寸更新+全 GC）的物理成本，继续挖 JVM 的可行点只剩"shape 未变的第二阶段省掉一次 GC"与"仅方法体走标准快路径"。
 ## 0. TL;DR
 
 | 问题 | 结论 |
