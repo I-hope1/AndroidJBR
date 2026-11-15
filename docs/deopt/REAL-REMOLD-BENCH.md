@@ -78,3 +78,27 @@ instrumentation → P1-stacked。往 AndroidJBR / JBR 21 回移用 standalone �
   只对比 JBR 本身。
 * 合成 `work()` 方法 6.5 KB（低于 release `HugeMethodLimit=8000`），代表"大方法 + 结构性热更"
   的最坏 N 倍，但不是真实 Minecraft 类体量。
+
+## 6. 最新 Remold CI 构建复测（2026-11-15 10:39）
+
+用 Remold `main` 最新 CI 构建（run
+[43705168373](https://github.com/I-hope1/Remold/actions/runs/43705168373)，
+commit `c0a38d64`，artifact `remold-dist`，包含 *perf(native): reuse warm
+jvmtiEnv and batch-clear tags via tagged heap* 等改动）重跑同一套 workload，
+对照组仍为未打补丁的 JBR 25.0.4.1：
+
+| 场景 | 指标 | 原版 JBR 25.0.4.1 | P0+P1+P2 JBR 25 | 变化 |
+|---|---|---|---|---|
+| 结构性两阶段 | redefine p50 / max | **329.5 / 441 ms** | **97 / 116 ms** | p50 **−71%** |
+| 结构性两阶段 | 批次 total p50 | 453.5 ms | 228.5 ms | −50% |
+| 结构性两阶段 | `ForceSafepoint` 次数 | **147** | **0** | 排空风暴消失 |
+| 结构性两阶段 | P1 取消事件 | 0 | 33 | 排空被吸收 |
+| 纯方法体 | redefine p50 / max | 67 / 309 ms | **19.5 / 28 ms** | p50 −71%，max −91% |
+| 纯方法体 | 批次 total p50 | 158 ms | 77.5 ms | −51% |
+| 纯方法体 | 派发 | enhanced | **12/12 standard（P2）** | 跳过堆遍历/GC/停编译 |
+
+结论与之前一致：最新内测版 agent 在未打补丁的 JBR 上把排空长尾放大到
+p50 329 ms / max 441 ms（结构性）与 max 309 ms（纯方法体），补丁栈把它压到
+97 ms / 19.5 ms，且 `ForceSafepoint` 147→0、无 >50 ms drain。剩余时间主要是
+Remold 侧 readers/gate/alignDiff/initFix（p50 合计 ~40–60 ms）与结构性 Stage A
+的 6 次 Heap-Inspection Full GC（物理下限），与 P2 v1 封版结论一致。
