@@ -18,6 +18,9 @@
   - **release 实测（bench.Med 长 C2，20 轮 redefine）**：排空 **444–775 ms → p50 6 ms / max 12 ms**，`redefine_ms` **30–49 ms**，20 次取消（phase=idealLoop/iterGVN2），**20/20 轮 bad=0 stale=0**，被取消的 `Med.m0–m3` 在恢复窗口全部重新 level-4 编译。
   - fastdebug 交叉验证：16 次取消（idealLoop/macroExpand/optimizer/regalloc），drain max 171 ms；C1-only 场景 19 次 C1 取消且之后重新 level-1 编译；P0 全套回归（并发/SafepointALot/嵌套/shutdown）通过。
 
+- **真实 Remold（CI 内测版 agent）实测完成**（`REAL-REMOLD-BENCH.md`）：JBR 25 release 补丁组 vs 未打补丁 JBR 25.0.4.1，Remold example 应用 12 轮结构性两阶段热更：**ForceSafepoint 23 → 0**，批次 `total` p50 **177 → 155 ms**、mean **225 → 184 ms**；剩余离群批次由 Remold 侧实例字段回填（`patch` max 342–406 ms）主导，JIT 排空已无贡献 → 瓶颈如预期转移到 Remold 自身。
+  - 补丁栈已整理：**生产用 `p0-notify-wait-v4` + `p1-cancellation-standalone`**（已用 `git apply --check` 验证在干净 P0 上直接可应用，无 instrumentation 依赖）。
+
 ## 0. TL;DR
 
 | 问题 | 结论 |
