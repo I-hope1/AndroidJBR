@@ -1,0 +1,113 @@
+diff --git a/src/hotspot/share/prims/jvmtiEnhancedRedefineClasses.cpp b/src/hotspot/share/prims/jvmtiEnhancedRedefineClasses.cpp
+index c68a612fb..978bbf15b 100644
+--- a/src/hotspot/share/prims/jvmtiEnhancedRedefineClasses.cpp
++++ b/src/hotspot/share/prims/jvmtiEnhancedRedefineClasses.cpp
+@@ -738,6 +738,9 @@ void VM_EnhancedRedefineClasses::doit() {
+     _timer_vm_op_doit.start();
+   }
+ 
++  // Local (diagnostic) timers: decompose doit() into its structural phases.
++  elapsedTimer t_single, t_flush, t_cpool, t_inst;
++
+   Universe::set_inside_redefinition(true);
+   DcevmSharedGC::create_static_instance();
+ 
+@@ -764,10 +767,28 @@ void VM_EnhancedRedefineClasses::doit() {
+     ClassLoaderDataGraph::dictionary_classes_do_update_klass(Thread::current(), name_h, new_class, old_class, false);
+   }
+ 
++  if (log_is_enabled(Info, redefine, class, timer)) { t_single.start(); }
++  static int g_enh_op_seq = 0;
++  const int op_seq = ++g_enh_op_seq;
++  if (log_is_enabled(Info, redefine, class, timer)) {
++    log_info(redefine, class, timer)("op%d begin: max_flags=%d classes=%d",
++                                     op_seq, _max_redefinition_flags, _new_classes->length());
++    for (int i = 0; i < _new_classes->length(); i++) {
++      InstanceKlass* nk = _new_classes->at(i);
++      InstanceKlass* ok = InstanceKlass::cast(nk->old_version());
++      log_info(redefine, class, timer)
++        ("op%d class=%s flags=%d old_size=%d new_size=%d old_isize=%d new_isize=%d old_fields=%d new_fields=%d old_methods=%d new_methods=%d",
++         op_seq, nk->external_name(), nk->redefinition_flags(),
++         ok->size(), nk->size(), ok->size_helper(), nk->size_helper(),
++         ok->java_fields_count(), nk->java_fields_count(),
++         ok->methods()->length(), nk->methods()->length());
++    }
++  }
+   for (int i = 0; i < _new_classes->length(); i++) {
+     Klass* new_class = _new_classes->at(i);
+     redefine_single_class(current, _new_classes->at(i));
+   }
++  if (log_is_enabled(Info, redefine, class, timer)) { t_single.stop(); }
+ 
+   // Update vmClasses::*_klass
+   for (int i = 0; i < _new_classes->length(); i++) {
+@@ -789,12 +810,16 @@ void VM_EnhancedRedefineClasses::doit() {
+ 
+   // Deoptimize all compiled code that depends on this class (do only once, because it clears whole cache)
+   // if (_max_redefinition_flags > Klass::ModifyClass) {
++  if (log_is_enabled(Info, redefine, class, timer)) { t_flush.start(); }
+     flush_dependent_code();
++  if (log_is_enabled(Info, redefine, class, timer)) { t_flush.stop(); }
+   // }
+ 
+   // Adjust constantpool caches for all classes that reference methods of the evolved class.
++  if (log_is_enabled(Info, redefine, class, timer)) { t_cpool.start(); }
+   ClearCpoolCacheAndUnpatch clear_cpool_cache(current);
+   ClassLoaderDataGraph::classes_do(&clear_cpool_cache);
++  if (log_is_enabled(Info, redefine, class, timer)) { t_cpool.stop(); }
+ 
+   // JSR-292 support
+   if (_any_class_has_resolved_methods) {
+@@ -802,6 +827,7 @@ void VM_EnhancedRedefineClasses::doit() {
+     ResolvedMethodTable::adjust_method_entries_dcevm(&trace_name_printed);
+   }
+ 
++  if (log_is_enabled(Info, redefine, class, timer)) { t_inst.start(); }
+   ChangePointersOopClosure<StoreNoBarrier> oopClosureNoBarrier;
+   ChangePointersOopClosure<StoreBarrier> oopClosure;
+   bool needs_instance_update = false;
+@@ -847,6 +873,10 @@ void VM_EnhancedRedefineClasses::doit() {
+ 
+     _timer_heap_iterate.stop();
+ 
++    if (log_is_enabled(Info, redefine, class, timer)) {
++      log_info(redefine, class, timer)("op%d instances: needs_instance_update=%d", op_seq, (int)needs_instance_update);
++    }
++
+ #if INCLUDE_G1GC
+     if (UseG1GC) {
+       // this should work also for other GCs
+@@ -856,6 +886,7 @@ void VM_EnhancedRedefineClasses::doit() {
+ 
+   }
+   log_trace(redefine, class, redefine, metadata)("After updating instances");
++  if (log_is_enabled(Info, redefine, class, timer)) { t_inst.stop(); }
+ 
+   for (int i = 0; i < _new_classes->length(); i++) {
+     InstanceKlass* cur = InstanceKlass::cast(_new_classes->at(i));
+@@ -925,6 +956,9 @@ void VM_EnhancedRedefineClasses::doit() {
+   if (needs_instance_update) {
+     // Do a full garbage collection to update the instance sizes accordingly
+     log_trace(redefine, class, redefine, metadata)("Before redefinition full GC run");
++    if (log_is_enabled(Info, redefine, class, timer)) {
++      log_info(redefine, class, timer)("op%d fullgc: flags=%d", op_seq, _max_redefinition_flags);
++    }
+ 
+     if (log_is_enabled(Info, redefine, class, timer)) {
+       _timer_heap_full_gc.start();
+@@ -993,6 +1027,15 @@ void VM_EnhancedRedefineClasses::doit() {
+ 
+   DcevmSharedGC::destroy_static_instance();
+   Universe::set_inside_redefinition(false);
++  if (log_is_enabled(Info, redefine, class, timer)) {
++    log_info(redefine, class, timer)
++      ("op%d doit detail: redefine_single=" JLONG_FORMAT "  flush=" JLONG_FORMAT
++       "  cpool=" JLONG_FORMAT "  instances=" JLONG_FORMAT
++       "  heap_iterate=" JLONG_FORMAT "  fullgc=" JLONG_FORMAT,
++       op_seq, (jlong)t_single.milliseconds(), (jlong)t_flush.milliseconds(),
++       (jlong)t_cpool.milliseconds(), (jlong)t_inst.milliseconds(),
++       (jlong)_timer_heap_iterate.milliseconds(), (jlong)_timer_heap_full_gc.milliseconds());
++  }
+   _timer_vm_op_doit.stop();
+ 
+   if (log_is_enabled(Trace, redefine, class, codecache)) {
