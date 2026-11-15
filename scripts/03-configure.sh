@@ -28,9 +28,6 @@ need_dir "$DUMMY_LIBS" "run ./scripts/02-apply-patches.sh first"
 # P0 added).  Accept that case as long as the files the patch touches differ
 # from the pinned tree; an untouched file still means "series not applied".
 while IFS= read -r line; do
-  line=${line%%#*}
-  line=$(printf '%s' "$line" | xargs)
-  [ -n "$line" ] || continue
   patch="$PATCH_DIR/$line"
   if git -C "$JBR_SRC" apply --reverse --check --whitespace=nowarn "$patch" 2>/dev/null; then
     continue
@@ -41,7 +38,7 @@ while IFS= read -r line; do
   if git -C "$JBR_SRC" diff --quiet "$JBR_PIN" -- "${files[@]}"; then
     die "patch not applied in $JBR_SRC: $line — run ./scripts/02-apply-patches.sh first"
   fi
-done < "$PATCH_SERIES"
+done < <(series_lines)
 
 extra_cflags="-DLE_STANDALONE -O3 -DANDROID -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
 extra_ldflags="-L$DUMMY_LIBS -Wl,--undefined-version"

@@ -7,6 +7,10 @@ See [docs/RUNTIME-PATCHES.md](docs/RUNTIME-PATCHES.md) for what each patch does,
 the measured effect (drain 444-775 ms -> 4-12 ms, body-only redefine ~38 -> 21 ms)
 and how to verify on device.
 
+The build workflows produce two variants from the same series:
+`--baseline` (Android port only) and `--runtime` (port + P0/P1/P2), uploaded as
+separate artifacts so a device can A/B them.
+
 # AndroidJBR
 
 [![CI](https://github.com/I-hope1/AndroidJBR/actions/workflows/ci.yml/badge.svg)](https://github.com/I-hope1/AndroidJBR/actions/workflows/ci.yml)

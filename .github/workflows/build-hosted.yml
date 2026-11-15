@@ -9,6 +9,11 @@ name: Full build (GitHub-hosted x86_64)
 # 25-40 min including a cold dependency download.  JBR 21 takes longer
 # (~1 h on 2 vCPU) but still fits the job timeout.
 #
+# Two variants are built from the same series (matrix, in parallel):
+#   baseline — Android port patch only
+#   runtime  — Android port + P0/P1/P2 DCEVM runtime patches (JBR 25)
+# Artifacts are named ...-baseline / ...-runtime so a device can A/B them.
+#
 # There is no release step here on purpose: artifacts land in the run page and
 # can be attached to a release manually.  Self-hosted arm64 builds stay in
 # build-full.yml.
@@ -35,11 +40,19 @@ concurrency:
 
 jobs:
   build:
+    name: build ${{ matrix.variant }} (JBR ${{ inputs.jbr }})
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        # The P0/P1/P2 runtime layer exists for JBR 25 only; JBR 21 gets the
+        # baseline build.
+        variant: ${{ fromJSON(inputs.jbr == '25' && '["baseline","runtime"]' || '["baseline"]') }}
     env:
       JBR_LINE: ${{ inputs.jbr }}
       JOBS: ${{ inputs.jobs }}
+      RUNTIME_PATCHES: ${{ matrix.variant == 'runtime' && '1' || '0' }}
       # apt's clang-18 has ld.lld next to the llvm bin dir; the generated
       # wrappers put this on PATH so `-fuse-ld=lld` resolves.
       LLD_BIN: /usr/lib/llvm-18/bin
@@ -87,7 +100,7 @@ jobs:
       - name: Upload JRE artifact
         uses: actions/upload-artifact@v7
         with:
-          name: jre${{ inputs.jbr }}-jbr-android-${{ github.run_number }}
+          name: jre${{ inputs.jbr }}-jbr-android-${{ github.run_number }}-${{ matrix.variant }}
           path: |
             out/jre*-jbr-android-arm64-*.tar.xz
             out/SHA256SUMS.txt

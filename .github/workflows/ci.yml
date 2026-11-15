@@ -15,15 +15,20 @@ concurrency:
 
 jobs:
   patch-check:
-    name: patch series applies to JBR ${{ matrix.line }} pin
+    name: patch series applies to JBR ${{ matrix.line }} pin (${{ matrix.runtime == '1' && 'with runtime patches' || 'baseline' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         line: ["21", "25"]
+        # Both variants are built: baseline = Android port only, runtime = port
+        # + P0/P1/P2 DCEVM patches (the runtime layer currently exists for JBR
+        # 25 only, so for JBR 21 both variants resolve to the same series).
+        runtime: ["1", "0"]
     env:
       JBR_LINE: ${{ matrix.line }}
+      RUNTIME_PATCHES: ${{ matrix.runtime }}
     steps:
       - uses: actions/checkout@v7
 
@@ -31,6 +36,8 @@ jobs:
         run: |
           grep -E '^(export )?(JBR_PIN|JBR_BRANCH)=' scripts/env.sh | head -5
           cat "patches/jbr${JBR_LINE}/series"
+          echo "RUNTIME_PATCHES=$RUNTIME_PATCHES"
+          ./scripts/check-patch.sh --print-series
 
       - name: Verify patches apply on the pinned JetBrainsRuntime tree
         # Blob-less partial clone + sparse checkout: only the files the patches

@@ -26,15 +26,20 @@ need_cmd git
 require_jbr_line
 SERIES="$PATCH_SERIES"
 
+# --print-series: show the effective patch list (honours RUNTIME_PATCHES=0)
+# without touching the network.  Handy in CI logs and for debugging which
+# layer a build is using.
+if [ "${1:-}" = "--print-series" ]; then
+  series_lines
+  exit 0
+fi
+
 patch_files=()
 while IFS= read -r line; do
-  line=${line%%#*}
-  line=$(printf '%s' "$line" | xargs)
-  [ -n "$line" ] || continue
   p="$PATCH_DIR/$line"
   need_file "$p" "listed in $SERIES"
   patch_files+=("$p")
-done < "$SERIES"
+done < <(series_lines)
 [ "${#patch_files[@]}" -gt 0 ] || die "$SERIES is empty"
 
 # Every path the patches touch (both sides, for the sparse checkout) and the

@@ -47,9 +47,6 @@ fi
 
 count=0
 while IFS= read -r line; do
-  line=${line%%#*}
-  line=$(printf '%s' "$line" | xargs)
-  [ -n "$line" ] || continue
   patch="$PATCH_DIR/$line"
   need_file "$patch" "listed in $SERIES"
 
@@ -68,7 +65,7 @@ while IFS= read -r line; do
   git -C "$JBR_SRC" apply --whitespace=nowarn "$patch" \
     || die "git apply failed: $line"
   count=$((count + 1))
-done < "$SERIES"
+done < <(series_lines)
 
 # --- build-tree scaffolding the OpenJDK build expects ------------------------
 # Empty archives for libraries bionic does not provide; configure's -L path

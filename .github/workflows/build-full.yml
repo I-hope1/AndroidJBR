@@ -32,11 +32,17 @@ permissions:
 
 jobs:
   build:
+    name: build ${{ matrix.variant }} (JBR ${{ inputs.jbr }})
     runs-on: [self-hosted, linux, arm64]
     timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.jbr == '25' && '["baseline","runtime"]' || '["baseline"]') }}
     env:
       JBR_LINE: ${{ inputs.jbr }}
       JOBS: ${{ inputs.jobs }}
+      RUNTIME_PATCHES: ${{ matrix.variant == 'runtime' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -73,7 +79,7 @@ jobs:
       - name: Upload JRE artifact
         uses: actions/upload-artifact@v7
         with:
-          name: jre${{ inputs.jbr }}-jbr-android-${{ github.run_number }}
+          name: jre${{ inputs.jbr }}-jbr-android-${{ github.run_number }}-${{ matrix.variant }}
           path: |
             out/jre*-jbr-android-arm64-*.tar.xz
             out/SHA256SUMS.txt

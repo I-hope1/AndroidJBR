@@ -59,6 +59,22 @@ require_jbr_line() {
   need_file "$PATCH_SERIES" "no patch series for JBR $JBR_LINE (expected $PATCH_SERIES)"
 }
 
+# series_lines: print the effective patch list, one relative path per line.
+# RUNTIME_PATCHES=0 drops the ../runtime/* layer so the same series can build a
+# baseline (Android port only) and a patched (port + P0/P1/P2) JBR from one
+# checkout.  Default is 1 (runtime patches included).
+series_lines() {
+  while IFS= read -r line; do
+    line=${line%%#*}
+    line=$(printf '%s' "$line" | xargs)
+    [ -n "$line" ] || continue
+    if [ "${RUNTIME_PATCHES:-1}" = "0" ] && [ "${line#../runtime/}" != "$line" ]; then
+      continue
+    fi
+    printf '%s\n' "$line"
+  done < "$PATCH_SERIES"
+}
+
 # require_toolchain: fail fast with actionable advice when the cross toolchain
 # is incomplete.
 require_toolchain() {

@@ -15,6 +15,21 @@ All three are applied in this order and verified by CI
 (`p2-runtime-series` branch run 43689018820: 4 patches, 75 files changed).
 They touch only HotSpot sources and do not change the Android port.
 
+## Automatic dual builds (patch / no-patch)
+
+The build workflows now produce **both variants from the same series in
+parallel**, so a device can A/B them directly:
+
+| variant | series applied | artifact |
+|---|---|---|
+| `baseline` | Android port patch only | `jre25-jbr-android-<run>-baseline` |
+| `runtime` | Android port + P0/P1/P2 runtime patches | `jre25-jbr-android-<run>-runtime` |
+
+`RUNTIME_PATCHES=0` selects the baseline series (`scripts/lib.sh:
+series_lines`), `RUNTIME_PATCHES=1` (default) the runtime one. `build-hosted`,
+`build-full` and the `ci` patch-check job all matrix over the variant; the JBR
+21 series has no runtime layer yet, so JBR 21 builds the baseline only.
+
 ## Measured effect (upstream-style JBR 25, Remold example workload)
 
 | metric | before | after |
