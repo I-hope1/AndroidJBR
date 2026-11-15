@@ -21,33 +21,37 @@ Remold `main` @ `a0aa7485`（本地 clone 从 `dd92750` pull 到最新）。目�
 | `@OnReload` 枚举 | ~2.9 s | **第二次**完整 `getInstances`，只为拿到实例列表 |
 | `@OnReload` 回调 | ~0.5–1 s | 2M 次反射 `Method.invoke` |
 
-## 3. 两处优化（补丁 `patches/remold-opt-instance-enum-and-batch-loop.patch`）
+## 3. 落地的优化：`StageBInstanceCache`（弱引用）
 
-1. **`StageBInstanceCache`（新增 62 行）**：stageB 补丁枚举出的 `Object[]` 直接留给同一批次的
-   `@OnReload` 复用，省掉第二次完整堆遍历（2M 实例 ≈2.9 s/批次）。语义上回调拿到的是
-   "重定义完成时"的实例快照，比逐次重新枚举更贴近 `@OnReload` 的"存量实例"定义；
-   批次开始清空、条目 120 s 过期，避免强引用滞留。
-2. **`init$ALL` 批量循环（InitFix 内生成）**：在补丁隐藏类（`Host$$HotswapPatch`）里用 ASM
-   追加 `static void init$ALL(Object[])`，类内循环调用各 `init$F`；无依赖、非 SELF 的实例任务
-   走一次静态调用，替代逐实例 `invokeExact`（跨轮次隐藏类使调用点 megamorphic，单次约 1.5 µs）。
-   踩坑：`INVOKESTATIC` 的 owner 必须是补丁隐藏类自身，不是宿主类名，否则
-   `NoSuchMethodError: Host.init$F(Host)`。
-   批量路径抛异常时回退到原逐实例路径（条件 CAS 写幂等，重跑不改变结果）。
+stageB 补丁枚举出的 `Object[]` 留给同一批次的 `@OnReload` 复用，省掉第二次完整堆遍历
+（2M 实例 ≈2.9 s/批次）。语义上回调拿到的是"重定义完成时"的实例快照，比逐次重新枚举
+更贴近 `@OnReload` 的"存量实例"定义。
 
-## 4. 结果（同一台机器、同一 workload、最新 Remold agent 基线）
+关键实现细节（两次 CI 返工）：
+1. **必须弱引用**：`WeakReference<Object[]>`。强引用版本会让 P0.5 探针失败——
+   测试显式 `System.gc()` 后检查残留实例，缓存数组把旧实例钉在堆里（residue=100000）。
+   弱引用被 GC 清掉时回调回退实时枚举，行为仍正确。
+2. **批量 `init$ALL` 循环方案已回退**（曾实现，−0.5 s/2M）：批量调用会让
+   链接失败的字段方法把 hidden class 的 indy call site 标记为 erroneous，
+   随后的逐实例回退无法再补同轮其它字段，破坏 `tests:initFixOracle` CaseLnk
+   "链接失败不牵连其它字段"的契约。收益小、契约重，直接放弃。
+
+## 4. 结果（同一台机器、同一 workload，最新 Remold agent 基线）
 
 | 指标 | 优化前 | 优化后 | 变化 |
 |---|---|---|---|
-| 2M 批次 total p50 | 11254 ms | **7617 ms** | **−32%** |
-| 2M `redefine` p50 | 1347 ms | 921 ms | 噪声范围内 |
-| 2M stageB p50 | 6284 ms | 5546 ms | −12% |
-| 2M `applyPatch inst` p50 | 3139 ms | 2614 ms | −17% |
+| 2M 批次 total p50 | 11254 ms | **8720 ms** | **−23%** |
 | 2M 每批 `getInstances` 次数 | 2 | **1** | 第二次枚举消失 |
 | 普通结构性 12 轮 total p50 | 194.5 ms | 202.5 ms | 噪声（每批枚举 2→1） |
 | 纯方法体 12 轮 total p50 | 51.5 ms | 56 ms | 噪声 |
 
-正确性：3/3、12/12 全部 hotswap 成功，`failedFields=[]`、`skippedFields=[]`、
-无批量路径回退、`ForceSafepoint` 仍为 0。
+正确性：Remold CI run
+[43711933616](https://github.com/I-hope1/Remold/actions/runs/43711933616) 全绿——
+`Test Matrix (javac 8/11/17/21/25)`、`P0.5 Probe (JBR 17/21)`、`Test on DCEVM (JBR 21)`、
+`Build Distributable Jars` 均通过；2M 本地 3/3、普通负载 12/12 hotswap 成功，
+`failedFields=[]`、`ForceSafepoint` 仍为 0。
+
+Remold main 提交：`9574e46`（初始实现）、`f0b4895`（弱引用修复）、`bd6bc03`（回退批量循环）。
 
 ## 5. 还能往哪压
 
