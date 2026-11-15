@@ -1,0 +1,474 @@
+diff --git a/src/hotspot/share/c1/c1_Compilation.cpp b/src/hotspot/share/c1/c1_Compilation.cpp
+index cf1f7e500..1f03447ed 100644
+--- a/src/hotspot/share/c1/c1_Compilation.cpp
++++ b/src/hotspot/share/c1/c1_Compilation.cpp
+@@ -37,6 +37,8 @@
+ #include "compiler/compilationMemoryStatistic.hpp"
+ #include "compiler/compileLog.hpp"
+ #include "compiler/compiler_globals.hpp"
++#include "compiler/compileBroker.hpp"
++#include "compiler/compilerThread.hpp"
+ #include "compiler/compilerDirectives.hpp"
+ #include "compiler/compileTask.hpp"
+ #include "memory/resourceArea.hpp"
+@@ -392,11 +394,23 @@ int Compilation::compile_java_method() {
+     build_hir();
+   }
+   CHECK_BAILOUT_(no_frame_size);
++
++  // P1: stage boundary (HIR built) cooperative cancellation.
++  if (CompileBroker::redefinition_cancel_requested()) {
++    cancel_compilation("cancelled by enhanced class redefinition");
++    return no_frame_size;
++  }
+   if (BailoutAfterHIR) {
+     BAILOUT_("Bailing out because of -XX:+BailoutAfterHIR", no_frame_size);
+   }
+ 
+ 
++  // P1: stage boundary (before LIR emission) cooperative cancellation.
++  if (CompileBroker::redefinition_cancel_requested()) {
++    cancel_compilation("cancelled by enhanced class redefinition");
++    return no_frame_size;
++  }
++
+   {
+     PhaseTraceTime timeit(_t_emit_lir);
+ 
+@@ -412,6 +426,12 @@ int Compilation::compile_java_method() {
+ 
+   DEBUG_ONLY(CompilationMemoryStatistic::do_test_allocations();)
+ 
++  // P1: stage boundary (LIR -> CodeGen) cooperative cancellation.
++  if (CompileBroker::redefinition_cancel_requested()) {
++    cancel_compilation("cancelled by enhanced class redefinition");
++    return no_frame_size;
++  }
++
+   {
+     PhaseTraceTime timeit(_t_codeemit);
+     return emit_code_body();
+@@ -444,6 +464,12 @@ void Compilation::install_code(int frame_size) {
+ 
+ void Compilation::compile_method() {
+ 
++  // P1: do not even start a compilation once the redefinition gate is closed.
++  if (CompileBroker::redefinition_cancel_requested()) {
++    cancel_compilation("cancelled by enhanced class redefinition");
++    return;
++  }
++
+   {
+     PhaseTraceTime timeit(_t_setup);
+ 
+@@ -482,6 +508,12 @@ void Compilation::compile_method() {
+   // Note: make sure we mark the method as not compilable!
+   CHECK_BAILOUT();
+ 
++  // P1: stage boundary (HIR -> LIR) cooperative cancellation.
++  if (CompileBroker::redefinition_cancel_requested()) {
++    cancel_compilation("cancelled by enhanced class redefinition");
++    return;
++  }
++
+   if (should_install_code()) {
+     // install code
+     PhaseTraceTime timeit(_t_codeinstall);
+@@ -580,6 +612,7 @@ Compilation::Compilation(AbstractCompiler* compiler, ciEnv* env, ciMethod* metho
+ , _has_scoped_access(method->is_scoped())
+ , _install_code(install_code)
+ , _bailout_msg(nullptr)
++, _is_cancelled(false)
+ , _first_failure_details(nullptr)
+ , _exception_info_list(nullptr)
+ , _allocator(nullptr)
+@@ -607,7 +640,11 @@ Compilation::Compilation(AbstractCompiler* compiler, ciEnv* env, ciMethod* metho
+   CompilationMemoryStatisticMark cmsm(directive);
+ 
+   compile_method();
+-  if (bailed_out()) {
++  if (is_cancelled()) {
++    // P1: transient cancellation by an enhanced redefinition. Do NOT mark the
++    // method not compilable: the ciEnv already carries a transient failure and
++    // the compilation policy will re-enqueue the method for a later compilation.
++  } else if (bailed_out()) {
+     _env->record_method_not_compilable(bailout_msg());
+     if (is_profiling()) {
+       // Compilation failed, create MDO, which would signal the interpreter
+@@ -645,6 +682,25 @@ void Compilation::notice_inlined_method(ciMethod* method) {
+ }
+ 
+ 
++void Compilation::cancel_compilation(const char* msg) {
++  if (_is_cancelled) {
++    return;
++  }
++  _is_cancelled = true;
++  if (log_is_enabled(Info, redefine, class)) {
++    ResourceMark rm;
++    CompileTask* task = CompilerThread::current() != nullptr ? CompilerThread::current()->task() : nullptr;
++    log_info(redefine, class)("cancelled in-flight compilation (C1): method='%s' level=%d",
++                              task != nullptr ? task->method()->name_and_sig_as_C_string() : "?",
++                              task != nullptr ? task->comp_level() : -1);
++  }
++  // Transient failure on the ciEnv (not not_compilable): the broker reports it
++  // and a later compile of this method is allowed.
++  _env->record_failure(msg);
++  bailout(msg);
++}
++
++
+ void Compilation::bailout(const char* msg) {
+   assert(msg != nullptr, "bailout message must exist");
+   // record the bailout for hserr envlog
+diff --git a/src/hotspot/share/c1/c1_Compilation.hpp b/src/hotspot/share/c1/c1_Compilation.hpp
+index dab584ac3..287021c28 100644
+--- a/src/hotspot/share/c1/c1_Compilation.hpp
++++ b/src/hotspot/share/c1/c1_Compilation.hpp
+@@ -85,6 +85,7 @@ class Compilation: public StackObj {
+   bool               _has_scoped_access; // For shared scope closure
+   bool               _install_code;
+   const char*        _bailout_msg;
++  bool               _is_cancelled;  // P1: transient redefinition cancellation
+   CompilationFailureInfo* _first_failure_details; // Details for the first failure happening during compilation
+   bool               _oom;
+   ExceptionInfoList* _exception_info_list;
+@@ -214,6 +215,11 @@ class Compilation: public StackObj {
+   void bailout(const char* msg);
+   bool bailed_out() const                        { return _bailout_msg != nullptr; }
+   const char* bailout_msg() const                { return _bailout_msg; }
++  bool is_cancelled() const                      { return _is_cancelled; }
++  // P1: abort this compilation because an enhanced redefinition is in progress.
++  // Unlike a regular bailout this is transient: the method must stay
++  // compilable so that the policy re-enqueues it after the redefine window.
++  void cancel_compilation(const char* msg);
+   const CompilationFailureInfo* first_failure_details() const { return _first_failure_details; }
+ 
+   static uint desired_max_code_buffer_size() {
+diff --git a/src/hotspot/share/compiler/compileBroker.cpp b/src/hotspot/share/compiler/compileBroker.cpp
+index ec18081d3..468f43b56 100644
+--- a/src/hotspot/share/compiler/compileBroker.cpp
++++ b/src/hotspot/share/compiler/compileBroker.cpp
+@@ -147,7 +147,7 @@ CompileLog** CompileBroker::_compiler2_logs = nullptr;
+ volatile jint CompileBroker::_compilation_id     = 0;
+ volatile jint CompileBroker::_osr_compilation_id = 0;
+ volatile jint CompileBroker::_native_compilation_id = 0;
+-volatile bool CompileBroker::_compilation_stopped = false;
++volatile int  CompileBroker::_compilation_stopped = 0;
+ volatile jint CompileBroker::_active_compilations = 0;
+ volatile int  CompileBroker::_compilation_stop_count = 0;
+ 
+@@ -1984,7 +1984,7 @@ void CompileBroker::compiler_thread_loop() {
+               ThreadToNativeFromVM ttn(thread);
+               MonitorLocker locker(DcevmCompilation_lock, Mutex::_no_safepoint_check_flag);
+               // stop all compilations if requested from redefinition
+-              while (_compilation_stopped) {
++              while (Atomic::load(&_compilation_stopped) != 0) {
+                 locker.wait(20);
+               }
+               Atomic::add(&_active_compilations, 1);
+@@ -3077,7 +3077,7 @@ void CompileBroker::stopCompilationBeforeEnhancedRedefinition() {
+   {
+     MonitorLocker locker(DcevmCompilation_lock, Mutex::_no_safepoint_check_flag);
+     if (_compilation_stop_count++ == 0) {
+-      _compilation_stopped = true;
++      Atomic::store(&_compilation_stopped, 1);
+     }
+   }
+   JavaThread* self = JavaThread::current();
+@@ -3098,7 +3098,7 @@ void CompileBroker::releaseCompilationAfterEnhancedRedefinition() {
+   MonitorLocker locker(DcevmCompilation_lock, Mutex::_no_safepoint_check_flag);
+   assert(_compilation_stop_count > 0, "unbalanced enhanced redefinition stop/release");
+   if (--_compilation_stop_count == 0) {
+-    _compilation_stopped = false;
++    Atomic::store(&_compilation_stopped, 0);
+     locker.notify_all();
+   }
+ }
+diff --git a/src/hotspot/share/compiler/compileBroker.hpp b/src/hotspot/share/compiler/compileBroker.hpp
+index af4bc3eca..36ed568c7 100644
+--- a/src/hotspot/share/compiler/compileBroker.hpp
++++ b/src/hotspot/share/compiler/compileBroker.hpp
+@@ -201,7 +201,9 @@ class CompileBroker: AllStatic {
+   static volatile jint _osr_compilation_id;
+   static volatile jint _native_compilation_id;
+ 
+-  static volatile bool _compilation_stopped;
++  // 0: compilation gate open, 1: enhanced redefinition window (gate closed).
++  // Read by compiler threads with Atomic::load (see redefinition_cancel_requested()).
++  static volatile int  _compilation_stopped;
+   static volatile jint _active_compilations;
+   // Number of concurrent enhanced redefinitions that closed the compiler gate.
+   static volatile int  _compilation_stop_count;
+@@ -464,6 +466,14 @@ class CompileBroker: AllStatic {
+   // gate was closed has finished. Must be called with the gate closed and in
+   // VM state (the wait uses a safepoint-checked monitor).
+   static void drainCompilationsForEnhancedRedefinition();
++
++  // P1: true while an enhanced class redefinition wants in-flight compilations
++  // to stop. Compiler threads poll this cooperatively; when no enhanced
++  // redefinition is allowed this is a compile-time-constant false in practice
++  // (AllowEnhancedClassRedefinition is false -> short-circuit before the load).
++  static bool redefinition_cancel_requested() {
++    return AllowEnhancedClassRedefinition && Atomic::load(&_compilation_stopped) != 0;
++  }
+   // P1 instrumentation: log where each in-flight C2 compilation currently is.
+   static void dumpInFlightCompilations();
+ };
+diff --git a/src/hotspot/share/opto/c2compiler.cpp b/src/hotspot/share/opto/c2compiler.cpp
+index 71dfa8cfa..a651456e1 100644
+--- a/src/hotspot/share/opto/c2compiler.cpp
++++ b/src/hotspot/share/opto/c2compiler.cpp
+@@ -143,6 +143,14 @@ void C2Compiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, boo
+ 
+     // Check result and retry if appropriate.
+     if (C.failure_reason() != nullptr) {
++      // P1: cancellation by an enhanced redefinition is transient. Do not run
++      // the usual retry-with-disabled-optimization ladder (pointless work
++      // while the redefinition window is still open) and do not mark the
++      // method not compilable (the compilation policy will re-enqueue it).
++      if (C.failure_reason_is(Compile::cancelled_by_redefinition())) {
++        env->record_failure(C.failure_reason());
++        break;
++      }
+       if (C.failure_reason_is(retry_no_subsuming_loads())) {
+         assert(subsume_loads, "must make progress");
+         subsume_loads = false;
+diff --git a/src/hotspot/share/opto/chaitin.cpp b/src/hotspot/share/opto/chaitin.cpp
+index 30368d80c..3a4f83d70 100644
+--- a/src/hotspot/share/opto/chaitin.cpp
++++ b/src/hotspot/share/opto/chaitin.cpp
+@@ -554,6 +554,11 @@ void PhaseChaitin::Register_Allocate() {
+ 
+   // If we spill, split and recycle the entire thing
+   while( spills ) {
++    // P1: cooperative cancellation between Split/Select rounds (each round is
++    // tens of ms in release, so this bounds the cancellation latency).
++    if (C->check_cancellation()) {
++      return;
++    }
+     if( _trip_cnt++ > 24 ) {
+       DEBUG_ONLY( dump_for_spill_split_recycle(); )
+       if( _trip_cnt > 27 ) {
+diff --git a/src/hotspot/share/opto/compile.cpp b/src/hotspot/share/opto/compile.cpp
+index 14c135a34..a6758d0f9 100644
+--- a/src/hotspot/share/opto/compile.cpp
++++ b/src/hotspot/share/opto/compile.cpp
+@@ -627,6 +627,27 @@ void Compile::print_ideal_ir(const char* phase_name) {
+ // the continuation bci for on stack replacement.
+ 
+ 
++bool Compile::check_cancellation() {
++  if (!_is_cancelled && CompileBroker::redefinition_cancel_requested()) {
++    _is_cancelled = true;
++    // Deliberately not record_method_not_compilable(): this is a transient
++    // condition, the recompilation policy will retry the method after the
++    // redefinition window.
++    record_failure(cancelled_by_redefinition());
++    if (log_is_enabled(Info, redefine, class)) {
++      ResourceMark rm;
++      CompilerThread* ct = CompilerThread::current();
++      const char* phase = ct != nullptr ? ct->current_phase_name() : nullptr;
++      CompileTask* task = env()->task();
++      log_info(redefine, class)("cancelled in-flight compilation: method='%s' level=%d phase='%s'",
++                                task != nullptr ? task->method()->name_and_sig_as_C_string() : "?",
++                                task != nullptr ? task->comp_level() : -1,
++                                phase != nullptr ? phase : "(between-phases)");
++    }
++  }
++  return _is_cancelled;
++}
++
+ Compile::Compile(ciEnv* ci_env, ciMethod* target, int osr_bci,
+                  Options options, DirectiveSet* directive)
+     : Phase(Compiler),
+@@ -2287,6 +2308,11 @@ void Compile::remove_root_to_sfpts_edges(PhaseIterGVN& igvn) {
+ //------------------------------Optimize---------------------------------------
+ // Given a graph, optimize it.
+ void Compile::Optimize() {
++  // P1: abort early if an enhanced redefinition is already in progress.
++  if (check_cancellation()) {
++    return;
++  }
++
+   TracePhase tp(_t_optimizer);
+ 
+ #ifndef PRODUCT
+@@ -2990,6 +3016,11 @@ void Compile::optimize_logic_cones(PhaseIterGVN &igvn) {
+ //------------------------------Code_Gen---------------------------------------
+ // Given a graph, generate code for it
+ void Compile::Code_Gen() {
++  // P1: abort early if an enhanced redefinition is already in progress.
++  if (check_cancellation()) {
++    return;
++  }
++
+   if (failing()) {
+     return;
+   }
+diff --git a/src/hotspot/share/opto/compile.hpp b/src/hotspot/share/opto/compile.hpp
+index ac3069840..6bbfa1fa7 100644
+--- a/src/hotspot/share/opto/compile.hpp
++++ b/src/hotspot/share/opto/compile.hpp
+@@ -372,6 +372,7 @@ class Compile : public Phase {
+   DirectiveSet*         _directive;             // Compiler directive
+   CompileLog*           _log;                   // from CompilerThread
+   CHeapStringHolder     _failure_reason;        // for record_failure/failing pattern
++  bool                  _is_cancelled = false;  // P1: cooperative redefinition cancel
+ 
+   CompilationFailureInfo* _first_failure_details; // Details for the first failure happening during compilation
+   GrowableArray<CallGenerator*> _intrinsics;    // List of intrinsics.
+@@ -818,6 +819,16 @@ class Compile : public Phase {
+ 
+   const CompilationFailureInfo* first_failure_details() const { return _first_failure_details; }
+ 
++  // P1: cooperative cancellation during enhanced class redefinition. Compiler
++  // threads poll this from phase loops; the first observation records a
++  // cancellation failure (NOT "not compilable", the method will be re-enqueued
++  // once the redefinition window ends) and all later polls return true.
++  static const char* cancelled_by_redefinition() {
++    return "cancelled by enhanced class redefinition";
++  }
++  bool is_cancelled() const          { return _is_cancelled; }
++  bool check_cancellation();
++
+   bool failing() {
+     if (failing_internal()) {
+       return true;
+diff --git a/src/hotspot/share/opto/escape.cpp b/src/hotspot/share/opto/escape.cpp
+index d7253b065..46d5c0153 100644
+--- a/src/hotspot/share/opto/escape.cpp
++++ b/src/hotspot/share/opto/escape.cpp
+@@ -162,6 +162,10 @@ bool ConnectionGraph::compute_escape() {
+   ptnodes_worklist.append(phantom_obj);
+   java_objects_worklist.append(phantom_obj);
+   for( uint next = 0; next < ideal_nodes.size(); ++next ) {
++    // P1: cooperative cancellation (sampled every 64 nodes).
++    if ((next & 0x3F) == 0 && C->check_cancellation()) {
++      return false;
++    }
+     Node* n = ideal_nodes.at(next);
+     // Create PointsTo nodes and add them to Connection Graph. Called
+     // only once per ideal node since ideal_nodes is Unique_Node list.
+@@ -4357,7 +4361,12 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
+   //  the alloc_worklist if the order of the worklist processing is changed,
+   //  see the comment in find_second_addp().)
+   //
++  uint cancel_poll = 0;
+   while (alloc_worklist.length() != 0) {
++    // P1: cooperative cancellation (sampled every 64 allocations).
++    if ((++cancel_poll & 0x3F) == 0 && _compile->check_cancellation()) {
++      return;
++    }
+     Node *n = alloc_worklist.pop();
+     uint ni = n->_idx;
+     if (n->is_Call()) {
+diff --git a/src/hotspot/share/opto/loopTransform.cpp b/src/hotspot/share/opto/loopTransform.cpp
+index 934d09484..d40050aaa 100644
+--- a/src/hotspot/share/opto/loopTransform.cpp
++++ b/src/hotspot/share/opto/loopTransform.cpp
+@@ -3725,6 +3725,13 @@ bool IdealLoopTree::iteration_split_impl(PhaseIdealLoop *phase, Node_List &old_n
+ //=============================================================================
+ //------------------------------iteration_split--------------------------------
+ bool IdealLoopTree::iteration_split(PhaseIdealLoop* phase, Node_List &old_new) {
++  // P1: cooperative cancellation during enhanced class redefinition. This is
++  // the loop-tree recursion driver; one atomic load per loop is negligible and
++  // lets a long IdealLoop pass abort at loop granularity.
++  if (phase->C->check_cancellation()) {
++    return false;
++  }
++
+   // Recursively iteration split nested loops
+   if (_child && !_child->iteration_split(phase, old_new)) {
+     return false;
+diff --git a/src/hotspot/share/opto/loopnode.cpp b/src/hotspot/share/opto/loopnode.cpp
+index 91dd04e72..6ae94bc00 100644
+--- a/src/hotspot/share/opto/loopnode.cpp
++++ b/src/hotspot/share/opto/loopnode.cpp
+@@ -5723,8 +5723,8 @@ void PhaseIdealLoop::build_and_optimize() {
+   // Build a loop tree on the fly.  Build a mapping from CFG nodes to
+   // IdealLoopTree entries.  Data nodes are NOT walked.
+   build_loop_tree();
+-  // Check for bailout, and return
+-  if (C->failing()) {
++  // Check for bailout (or cooperative redefinition cancellation), and return
++  if (C->failing() || C->check_cancellation()) {
+     return;
+   }
+ 
+@@ -5988,8 +5988,8 @@ void PhaseIdealLoop::build_and_optimize() {
+     // complain about it.
+   }
+ 
+-  // Check for bailout, and return
+-  if (C->failing()) {
++  // Check for bailout (or cooperative redefinition cancellation), and return
++  if (C->failing() || C->check_cancellation()) {
+     return;
+   }
+ 
+diff --git a/src/hotspot/share/opto/macro.cpp b/src/hotspot/share/opto/macro.cpp
+index a28043c8d..53921d683 100644
+--- a/src/hotspot/share/opto/macro.cpp
++++ b/src/hotspot/share/opto/macro.cpp
+@@ -2520,8 +2520,16 @@ bool PhaseMacroExpand::expand_macro_nodes() {
+   // Eliminate Opaque and LoopLimit nodes. Do it after all loop optimizations.
+   bool progress = true;
+   while (progress) {
++    // P1: cooperative cancellation at macro-expansion round granularity.
++    if (C->check_cancellation()) {
++      return true;
++    }
+     progress = false;
+     for (int i = C->macro_count(); i > 0; i--) {
++      // Sampled poll inside the macro list (cheap: only every 8 nodes).
++      if ((i & 7) == 0 && C->check_cancellation()) {
++        return true;
++      }
+       Node* n = C->macro_node(i-1);
+       bool success = false;
+       DEBUG_ONLY(int old_macro_count = C->macro_count();)
+@@ -2603,6 +2611,10 @@ bool PhaseMacroExpand::expand_macro_nodes() {
+   // For ReduceBulkZeroing, we must first process all arraycopy nodes
+   // before the allocate nodes are expanded.
+   while (C->macro_count() > 0) {
++    // P1: cooperative cancellation between macro expansions.
++    if (C->check_cancellation()) {
++      return true;
++    }
+     int macro_count = C->macro_count();
+     Node * n = C->macro_node(macro_count-1);
+     assert(n->is_macro(), "only macro nodes expected here");
+@@ -2669,6 +2681,10 @@ bool PhaseMacroExpand::expand_macro_nodes() {
+   // expand "macro" nodes
+   // nodes are removed from the macro list as they are processed
+   while (C->macro_count() > 0) {
++    // P1: cooperative cancellation between macro expansions.
++    if (C->check_cancellation()) {
++      return true;
++    }
+     int macro_count = C->macro_count();
+     Node * n = C->macro_node(macro_count-1);
+     assert(n->is_macro(), "only macro nodes expected here");
+diff --git a/src/hotspot/share/opto/phaseX.cpp b/src/hotspot/share/opto/phaseX.cpp
+index 08a9fcc54..83430a441 100644
+--- a/src/hotspot/share/opto/phaseX.cpp
++++ b/src/hotspot/share/opto/phaseX.cpp
+@@ -1032,9 +1032,17 @@ void PhaseIterGVN::optimize() {
+   const int max_live_nodes_increase_per_iteration = NodeLimitFudgeFactor * 3;
+ 
+   uint loop_count = 0;
++  uint cancel_poll = 0;
+   // Pull from worklist and transform the node. If the node has changed,
+   // update edge info and put uses on worklist.
+   while (_worklist.size() > 0) {
++    // P1: poll for cooperative redefinition cancellation every 64 nodes. The
++    // masked counter keeps the normal (no redefinition) path at zero extra
++    // atomic loads while still aborting a long IGVN pass in microseconds.
++    if ((++cancel_poll & 0x3F) == 0 && C->check_cancellation()) {
++      C->print_method(PHASE_AFTER_ITER_GVN, 3);
++      return;
++    }
+     if (C->check_node_count(max_live_nodes_increase_per_iteration, "Out of nodes")) {
+       C->print_method(PHASE_AFTER_ITER_GVN, 3);
+       return;
