@@ -79,3 +79,29 @@ disabled optimizations; the policy re-enqueues the method after the window.
 Same P1 changes, expressed for the stack
 p0-notify-wait-v4 -> p1-instrumentation -> this patch. Do not apply it directly
 on P0 (it conflicts); use p1-cancellation-standalone.patch there instead.
+
+## p2-standard-fastpath.patch
+
+Route method-body-only redefines through the standard VM_RedefineClasses path
+instead of the DCEVM enhanced path. Applies directly on top of
+p0-notify-wait-v4 (or P0+P1); the touched files do not overlap with P0/P1.
+
+- The standard dispatch doubles as the strict eligibility gate
+  (compare_and_normalize_class_versions), and on acceptance redefines without
+  the DCEVM instance walk, cpool classes_do, Heap-Inspection Full GC, or the
+  stop-compilation window.
+- Structural requests fall back to VM_EnhancedRedefineClasses.
+- ClassFileLoadHook is posted only once: the probe's transformed bytes are
+  captured in JvmtiThreadState and re-used by the enhanced fallback
+  (KlassFactory skips the hook for those classes).
+- Eligibility is gated on "no DCEVM version chain": mixing standard after
+  enhanced corrupts the old Klass version vtables (fastdebug
+  klassVtable.cpp:1617 fatal "method is from subclass"). Classes with an
+  enhanced history stay on the enhanced path until v2 fixes old-version vtable
+  maintenance.
+
+Measured on the Remold CI internal agent, 12 rounds: pure body-only hot reloads
+take the standard path and drop redefine p50 to 21 ms (max 25 ms) vs ~38 ms
+for a same-shape enhanced op; structural two-phase batches stay enhanced with
+no regression (97.5 ms vs 94 ms before P2); fastdebug + SafepointALot +
+interleaved System.gc() passes both workloads with all asserts enabled.

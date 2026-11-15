@@ -1,0 +1,309 @@
+diff --git a/src/hotspot/share/classfile/klassFactory.cpp b/src/hotspot/share/classfile/klassFactory.cpp
+index ac104fcbb..45ae447a0 100644
+--- a/src/hotspot/share/classfile/klassFactory.cpp
++++ b/src/hotspot/share/classfile/klassFactory.cpp
+@@ -34,6 +34,7 @@
+ #include "classfile/systemDictionaryShared.hpp"
+ #include "memory/resourceArea.hpp"
+ #include "prims/jvmtiEnvBase.hpp"
++#include "prims/jvmtiThreadState.hpp"
+ #include "prims/jvmtiRedefineClasses.hpp"
+ #include "runtime/handles.inline.hpp"
+ #include "utilities/macros.hpp"
+@@ -153,6 +154,13 @@ static ClassFileStream* check_class_file_load_hook(ClassFileStream* stream,
+                                            &end_ptr,
+                                            cached_class_file);
+ 
++    // P2: remember the (possibly transformed) bytes so that a fallback to the
++    // enhanced redefine path does not have to post ClassFileLoadHook twice.
++    JvmtiThreadState* jts = JavaThread::current()->jvmti_thread_state();
++    if (jts != nullptr && jts->cflh_capture_active() && !jts->cflh_capture_consume_mode()) {
++      jts->cflh_capture_add(name, ptr, pointer_delta_as_int(end_ptr, ptr));
++    }
++
+     if (ptr != stream->buffer()) {
+       // JVMTI agent has modified class file data.
+       // Set new class file stream using JVMTI agent modified class file data.
+@@ -187,8 +195,26 @@ InstanceKlass* KlassFactory::create_from_stream(ClassFileStream* stream,
+   // increment counter
+   THREAD->statistical_info().incr_define_class_count();
+ 
++  // P2: when falling back from the standard redefine probe to the enhanced
++  // path, reuse the bytes that the probe already ran through
++  // ClassFileLoadHook instead of posting the hook a second time.
++  bool used_cflh_cache = false;
++  {
++    JvmtiThreadState* jts = THREAD->jvmti_thread_state();
++    if (jts != nullptr && jts->cflh_capture_consume_mode()) {
++      unsigned char* cached = nullptr;
++      int cached_len = 0;
++      if (jts->cflh_capture_find(name, &cached, &cached_len)) {
++        stream = new ClassFileStream(cached, cached_len, "__CFLH_cached__",
++                                     /* from_boot_loader_modules_image */ false,
++                                     /* from_class_file_load_hook */ true);
++        used_cflh_cache = true;
++      }
++    }
++  }
++
+   // Skip this processing for VM hidden classes
+-  if (!cl_info.is_hidden()) {
++  if (!cl_info.is_hidden() && !used_cflh_cache) {
+     stream = check_class_file_load_hook(stream,
+                                         name,
+                                         loader_data,
+diff --git a/src/hotspot/share/prims/jvmtiEnv.cpp b/src/hotspot/share/prims/jvmtiEnv.cpp
+index 2c73c94ef..5c8f73125 100644
+--- a/src/hotspot/share/prims/jvmtiEnv.cpp
++++ b/src/hotspot/share/prims/jvmtiEnv.cpp
+@@ -565,6 +565,50 @@ static void JBR_call_hotswap_on_classes_redefined() {
+ }
+ 
+ 
++// P2: errors that mean "the standard redefine path cannot express this change"
++// (structural edits: added/deleted methods, field layout, modifiers, hierarchy,
++// class attributes).  Everything else is a hard failure and must be reported
++// as-is instead of being retried through the enhanced path.
++static bool is_dcevm_structural_redefinition_error(jvmtiError e) {
++  switch ((int)e) {
++    case 63: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED
++    case 64: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED
++    case 66: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED
++    case 67: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED
++    case 70: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED
++    case 71: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED
++    case 72: // JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_ATTRIBUTE_CHANGED
++    case 79: // JVMTI_ERROR_UNMODIFIABLE_CLASS (enhanced is_modifiable_class is a superset)
++      return true;
++    default:
++      return false;
++  }
++}
++
++// P2: the standard path can only be used on classes that have no DCEVM version
++// chain.  After an enhanced (structural) redefine, the old Klass version is
++// still reachable for on-stack methods and keeps vtable entries that point at
++// the newer class; redefining the newer class through the standard path does
++// not repair those old-version vtables, and the mixed chain corrupts
++// vtableEntry::method() ownership (asserted by fastdebug's klassVtable::verify:
++// "method is from subclass").  Until the standard path learns to maintain the
++// DCEVM old-version vtables, fall back to the enhanced path whenever any
++// target class already has a DCEVM version chain.
++static bool standard_path_eligible(jint class_count, const jvmtiClassDefinition* class_definitions) {
++  for (int i = 0; i < class_count; i++) {
++    oop mirror = JNIHandles::resolve_non_null(class_definitions[i].klass);
++    Klass* k = java_lang_Class::as_Klass(mirror);
++    if (k == nullptr || !k->is_instance_klass()) {
++      return false;
++    }
++    InstanceKlass* ik = InstanceKlass::cast(k);
++    if (ik->old_version() != nullptr || ik->new_version() != nullptr) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ // class_count - pre-checked to be greater than or equal to 0
+ // class_definitions - pre-checked for null
+ jvmtiError
+@@ -573,24 +617,66 @@ JvmtiEnv::RedefineClasses(jint class_count, const jvmtiClassDefinition* class_de
+   EventRedefineClasses event;
+   jvmtiError error;
+ 
+-  u8 op_id;
++  u8 op_id = 0;
++  JvmtiThreadState* jvmti_state = nullptr;
+ 
+   if (AllowEnhancedClassRedefinition) {
+-    // MutexLocker sd_mutex(EnhancedRedefineClasses_lock, Monitor::_no_safepoint_check_flag);
+-    // Stop compilation to avoid compiler race conditions (crashes) with advanced
+-    // redefinition. The guard reference-counts concurrent redefinitions and
+-    // releases the compiler threads on scope exit.
+-    EnhancedClassRedefinitionCompilationStop stop_compilation;
+-    VM_EnhancedRedefineClasses op(class_count, class_definitions, jvmti_class_load_kind_redefine);
+-    VMThread::execute(&op);
+-    op_id = op.id();
+-    error = (op.check_error());
++    if (!standard_path_eligible(class_count, class_definitions)) {
++      // DCEVM version chain present: keep the enhanced path (see comment on
++      // standard_path_eligible).
++      EnhancedClassRedefinitionCompilationStop stop_compilation;
++      VM_EnhancedRedefineClasses op(class_count, class_definitions, jvmti_class_load_kind_redefine);
++      VMThread::execute(&op);
++      op_id = op.id();
++      error = (op.check_error());
++      goto redefine_done;
++    }
++    // P2: run the standard path first.  It is the strict eligibility gate
++    // (method/field/modifier/interface/record/permitted-subclass checks) and,
++    // when it accepts the change, it performs the redefinition without the
++    // DCEVM instance walk / Heap-Inspection Full GC, and without entering the
++    // stop-compilation window at all.  Only when it reports a structural
++    // (DCEVM-only) change do we fall back to VM_EnhancedRedefineClasses.
++    //
++    // The ClassFileLoadHook event is posted by the standard probe; its output
++    // is captured in JvmtiThreadState and re-used by the enhanced fallback so
++    // the hook is never posted twice for the same class bytes.
++    jvmti_state = JvmtiThreadState::state_for(JavaThread::current());
++    jvmti_state->cflh_capture_begin();
++
++    VM_RedefineClasses std_op(class_count, class_definitions, jvmti_class_load_kind_redefine);
++    VMThread::execute(&std_op);
++    op_id = std_op.id();
++    error = std_op.check_error();
++
++    if (error == JVMTI_ERROR_NONE) {
++      log_info(redefine, class)("standard redefine path accepted (no structural change)");
++      jvmti_state->cflh_capture_end();
++    } else if (is_dcevm_structural_redefinition_error(error)) {
++      log_info(redefine, class)
++        ("standard redefine path rejected (%d: structural change), falling back to enhanced", (int)error);
++      // Reuse the ClassFileLoadHook output from the probe; never post it twice.
++      jvmti_state->cflh_capture_to_consume();
++
++      // Stop compilation to avoid compiler race conditions (crashes) with advanced
++      // redefinition. The guard reference-counts concurrent redefinitions and
++      // releases the compiler threads on scope exit.
++      EnhancedClassRedefinitionCompilationStop stop_compilation;
++      VM_EnhancedRedefineClasses op(class_count, class_definitions, jvmti_class_load_kind_redefine);
++      VMThread::execute(&op);
++      op_id = op.id();
++      error = (op.check_error());
++      jvmti_state->cflh_capture_end();
++    } else {
++      jvmti_state->cflh_capture_end();
++    }
+   } else {
+     VM_RedefineClasses op(class_count, class_definitions, jvmti_class_load_kind_redefine);
+     VMThread::execute(&op);
+     op_id = op.id();
+     error = op.check_error();
+   }
++redefine_done:
+   if (error == JVMTI_ERROR_NONE) {
+     event.set_classCount(class_count);
+     event.set_redefinitionId(op_id);
+diff --git a/src/hotspot/share/prims/jvmtiThreadState.cpp b/src/hotspot/share/prims/jvmtiThreadState.cpp
+index 1da50ffc9..b9752dae2 100644
+--- a/src/hotspot/share/prims/jvmtiThreadState.cpp
++++ b/src/hotspot/share/prims/jvmtiThreadState.cpp
+@@ -66,6 +66,10 @@ JvmtiThreadState::JvmtiThreadState(JavaThread* thread, oop thread_oop)
+   _hide_level           = 0;
+   _frame_pop_cnt        = 0;
+   _pending_step_for_popframe = false;
++  _cflh_capture_names = nullptr;
++  _cflh_capture_data = nullptr;
++  _cflh_capture_lens = nullptr;
++  _cflh_capture_consume = false;
+   _class_being_redefined = nullptr;
+   _class_load_kind = jvmti_class_load_kind_load;
+   _classes_being_redefined = nullptr;
+@@ -130,12 +134,70 @@ JvmtiThreadState::JvmtiThreadState(JavaThread* thread, oop thread_oop)
+ }
+ 
+ 
++// P2: ClassFileLoadHook output capture (see jvmtiThreadState.hpp).
++
++void JvmtiThreadState::cflh_capture_begin() {
++  cflh_capture_end();
++  _cflh_capture_names = new (mtInternal) GrowableArray<Symbol*>(8, mtInternal);
++  _cflh_capture_data  = new (mtInternal) GrowableArray<unsigned char*>(8, mtInternal);
++  _cflh_capture_lens  = new (mtInternal) GrowableArray<int>(8, mtInternal);
++  _cflh_capture_consume = false;
++}
++
++void JvmtiThreadState::cflh_capture_to_consume() {
++  _cflh_capture_consume = true;
++}
++
++void JvmtiThreadState::cflh_capture_end() {
++  if (_cflh_capture_names != nullptr) {
++    for (int i = 0; i < _cflh_capture_names->length(); i++) {
++      os::free(_cflh_capture_data->at(i));
++    }
++    delete _cflh_capture_names;
++    delete _cflh_capture_data;
++    delete _cflh_capture_lens;
++    _cflh_capture_names = nullptr;
++    _cflh_capture_data = nullptr;
++    _cflh_capture_lens = nullptr;
++  }
++  _cflh_capture_consume = false;
++}
++
++void JvmtiThreadState::cflh_capture_add(Symbol* name, const unsigned char* data, int len) {
++  if (_cflh_capture_names == nullptr || data == nullptr || len <= 0) {
++    return;
++  }
++  unsigned char* copy = (unsigned char*)os::malloc((size_t)len, mtInternal);
++  if (copy == nullptr) {
++    return;
++  }
++  memcpy(copy, data, (size_t)len);
++  _cflh_capture_names->append(name);
++  _cflh_capture_data->append(copy);
++  _cflh_capture_lens->append(len);
++}
++
++bool JvmtiThreadState::cflh_capture_find(Symbol* name, unsigned char** data, int* len) {
++  if (_cflh_capture_names == nullptr) {
++    return false;
++  }
++  for (int i = _cflh_capture_names->length() - 1; i >= 0; i--) {
++    if (_cflh_capture_names->at(i) == name) {
++      *data = _cflh_capture_data->at(i);
++      *len  = _cflh_capture_lens->at(i);
++      return true;
++    }
++  }
++  return false;
++}
++
+ JvmtiThreadState::~JvmtiThreadState()   {
+   assert(JvmtiThreadState_lock->is_locked(), "sanity check");
+ 
+   if (_classes_being_redefined != nullptr) {
+     delete _classes_being_redefined; // free the GrowableArray on C heap
+   }
++  cflh_capture_end();
+ 
+   // clear this as the state for the thread
+   get_thread()->set_jvmti_thread_state(nullptr);
+diff --git a/src/hotspot/share/prims/jvmtiThreadState.hpp b/src/hotspot/share/prims/jvmtiThreadState.hpp
+index f908d99b3..6b98d935e 100644
+--- a/src/hotspot/share/prims/jvmtiThreadState.hpp
++++ b/src/hotspot/share/prims/jvmtiThreadState.hpp
+@@ -207,6 +207,16 @@ class JvmtiThreadState : public CHeapObj<mtInternal> {
+  private:
+   ExceptionState _exception_state;
+ 
++  // P2: ClassFileLoadHook output capture.  When a redefine request is first
++  // probed through the standard VM_RedefineClasses path and then falls back to
++  // the enhanced (DCEVM) path, the ClassFileLoadHook event must not be posted
++  // twice: the probe captures the transformed bytes here and the fallback
++  // consumes them instead of re-posting the hook.
++  GrowableArray<Symbol*>*        _cflh_capture_names;
++  GrowableArray<unsigned char*>* _cflh_capture_data;
++  GrowableArray<int>*            _cflh_capture_lens;
++  bool                           _cflh_capture_consume;
++
+   // Used to send class being redefined/retransformed and kind of transform
+   // info to the class file load hook event handler.
+   Klass*                _class_being_redefined;
+@@ -412,6 +422,15 @@ class JvmtiThreadState : public CHeapObj<mtInternal> {
+   }
+ 
+   // Get the classes that are currently being redefined by this thread.
++  // P2: capture/consume CFLH output around a standard->enhanced redefine fallback.
++  void cflh_capture_begin();
++  void cflh_capture_to_consume();
++  void cflh_capture_end();
++  bool cflh_capture_active() const { return _cflh_capture_names != nullptr; }
++  bool cflh_capture_consume_mode() const { return _cflh_capture_consume; }
++  void cflh_capture_add(Symbol* name, const unsigned char* data, int len);
++  bool cflh_capture_find(Symbol* name, unsigned char** data, int* len);
++
+   inline GrowableArray<Klass*>* get_classes_being_redefined() {
+     return _classes_being_redefined;
+   }
