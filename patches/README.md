@@ -122,3 +122,26 @@ JBR_LINE=25 ./scripts/check-patch.sh  # JBR 25
 - 上游漂移会导致冲突：升 pin 是"重新生成 + 重测"的显式操作。
 - jbr25 补丁目前只保证**可应用**；是否可构建、DCEVM 是否可用需实际构建验证
   （见 README「支持矩阵」）。
+
+---
+
+## runtime patches (P0/P1/P2)
+
+`patches/runtime/` carries the DCEVM behaviour patches that are shared by the
+JBR 25 Android build and the upstream-style JBR 25 tree:
+
+| patch | effect |
+|---|---|
+| `p0-notify-wait-v4.patch` | stop-the-compilers window uses a ref-counted gate with a real monitor instead of 10 ms `VM_ForceSafepoint` polling; concurrent enhanced redefinitions are serialized; nested CFLH redefinition fails fast |
+| `p1-cancellation-standalone.patch` | compiler threads cooperatively abort in-flight C1/C2 compilations at phase boundaries while a redefinition window is open (cancellation is transient, never marks a method not-compilable) |
+| `p2-standard-fastpath.patch` | when a redefine request has no DCEVM structural change, dispatch through the standard `VM_RedefineClasses` path (no instance walk / cpool walk / Heap-Inspection Full GC / stop-compilation); structural requests fall back to the enhanced path. `ClassFileLoadHook` is posted exactly once |
+
+They apply on top of the Android port patch and are listed in `patches/jbr25/series`.
+The JBR 21 series does not include them yet: P1/P2 touch the JBR 25
+`VM_EnhancedRedefineClasses` code, which does not exist in the same shape on
+JBR 21; a JBR 21 port of the runtime layer is separate work.
+
+Expected effect (measured on the upstream-style JBR 25 tree with a real Remold
+hot-reload workload): enhanced-redefinition drain drops from 444-775 ms to
+4-12 ms, method-body-only batch redefine drops from ~38 ms to 21 ms, and the
+stop-the-compilers window no longer uses `VM_ForceSafepoint`.

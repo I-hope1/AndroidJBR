@@ -1,3 +1,12 @@
 # AndroidJBR series — JBR 25 (jbr25 @ 1b5d5af9510803fdc84f14dc636282d6cd02a5aa)
 # Everything needed to cross-build JetBrainsRuntime for Android arm64 (headless, server VM).
 jbr25-android-port.patch
+
+# Runtime behaviour patches (shared, also published under patches/runtime/):
+#   P0: safepoint-safe enhanced-redefinition drain + serialized concurrent redefines
+#   P1: cooperative cancellation of in-flight C1/C2 compilations
+#   P2: method-body-only redefines go through the standard VM_RedefineClasses path
+# Applied in this order; each one is self-contained and can be dropped.
+../runtime/p0-notify-wait-v4.patch
+../runtime/p1-cancellation-standalone.patch
+../runtime/p2-standard-fastpath.patch
