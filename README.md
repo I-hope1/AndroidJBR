@@ -1,3 +1,12 @@
+## Runtime patches (DCEVM hot reload)
+
+JBR 25 builds include the P0/P1/P2 DCEVM runtime patches on top of the Android
+port: ref-counted stop-the-compilers window, cooperative C1/C2 compilation
+cancellation, and a standard-path fast route for method-body-only redefines.
+See [docs/RUNTIME-PATCHES.md](docs/RUNTIME-PATCHES.md) for what each patch does,
+the measured effect (drain 444-775 ms -> 4-12 ms, body-only redefine ~38 -> 21 ms)
+and how to verify on device.
+
 # AndroidJBR
 
 [![CI](https://github.com/I-hope1/AndroidJBR/actions/workflows/ci.yml/badge.svg)](https://github.com/I-hope1/AndroidJBR/actions/workflows/ci.yml)
