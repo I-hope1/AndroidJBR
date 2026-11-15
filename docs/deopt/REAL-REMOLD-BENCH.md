@@ -34,6 +34,28 @@ agent 用 `AGENT=/path/to/remold-agent.jar` 指定。
 3. **max 仍有 532–598 ms 的离群批次**：两边的 `patch` 也有 342/406 ms 离群，说明离群来自
    Remold 实例回填路径（GC/对象遍历），JBR 侧已无排空长尾贡献。
 
+
+## 3.1 `-Dremold.agent.perf_log=true` 细分（内测版 agent 支持）
+
+同一负载再跑 12 轮，打开内测版 agent 的 perf 明细（`[HOTSWAP-BATCH] summary:`），
+每批次拆成 `readers / gate / alignDiff(fetch,lambda,diff,annDef,initFix) / liveScan / anon / redefine`：
+
+| 批次分项 | Baseline 原版 JBR | Patched (P0 v4 + P1) | 变化 |
+|---|---|---|---|
+| **redefine（JVMTI 调用，含 deopt-all/flush/GC）p50 / max** | **136 / 569 ms** | **113 / 156 ms** | p50 −17%，**max −73%** |
+| 逐批 redefine（ms） | 154,167,**569**,130,127,134,**377**,134,136,130,126,**452** | 125,143,124,156,106,108,136,113,111,104,110,108 | 长尾离群消失，稳定在 104–156 |
+| total p50 / max | 289 / 841 ms | 263 / 831 ms | −9%（max 由首轮启动主导） |
+| readers p50 / max | 22 / 57 ms | 24 / 59 ms | agent 侧，与 JBR 无关 |
+| gate p50 / max | 32 / 99 ms | 34 / 82 ms | 同上 |
+| alignDiff p50 / max | 21 / 55 ms | 21 / 62 ms | 同上（initFix 11–44 ms） |
+| liveScan / anon | 7 / 7 ms | 7 / 9 ms | 同上 |
+
+**关键**：P1 把 `redefine` 的离群完全抹平（569/452/377 → 全部 ≤156 ms），但**中位 `redefine`
+仍有 ~113 ms**——这部分是 `VM_EnhancedRedefineClasses::doit()` 里的 **deopt-all +
+`flush_dependent_code()` + 堆遍历/GC**，不是排空。**下一阶段的直接收益点就是
+`-XX:+OptimizeCodeFlush`（JBR 25 内置，默认关）+ "仅方法体变化走标准 VM_RedefineClasses 快路径"
+（文档实测 54–63 ms），而不是 `fill_buffer()`。**
+
 ## 4. 补丁栈独立性（验证记录）
 
 在 `p0-notify-wait-v4` 的干净 worktree 上实测：

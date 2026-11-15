@@ -89,7 +89,7 @@ gen_player 0
 "$JDK/bin/javac" -cp "$API" -d "$D/classes-$TAG" "$W"/*.java || exit 1
 "$JDK/bin/java" --enable-native-access=ALL-UNNAMED \
   -XX:+AllowEnhancedClassRedefinition -javaagent:"$AGENT=$D/classes-$TAG" \
-  -Dremold.agent.file_shake_ms=200 \
+  -Dremold.agent.file_shake_ms=200 ${JAVA_OPTS:-} \
   -Xlog:redefine+class=info:file="$D/$TAG-xlog.log" \
   -Xlog:safepoint=info:file="$D/$TAG-sp.log" \
   -cp "$D/classes-$TAG" example.Main > "$D/$TAG-app.log" 2>&1 &
