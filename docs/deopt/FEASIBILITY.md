@@ -14,6 +14,10 @@
   - fastdebug 对照：排空 124–1281 ms，Chaitin/regalloc 被校验放大最明显（regalloc 总段 630 ms）。
   - 结论：P1 取消点应下沉进 **IdealLoop / IGVN / EA 内层循环 + `Register_Allocate` 轮次边界**，不先碰 `buildIFG()`/`fill_buffer()`；C1 阶段边界 `bailout()` 成本极低可顺手加。
 
+- **P1 第一版已实现并通过 release/fastdebug 验证**（`P1-CANCELLATION.md`，补丁 `patches/p1-cancellation.patch`）：C2 在 `Optimize/Code_Gen` 入口、IGVN（每 64 节点采样）、IdealLoop（每 loop 树节点 + 边界）、EA、MacroExpand、`Register_Allocate` 轮次之间检查取消；C1 在 HIR→Optimizer→LIR→CodeGen 边界检查；取消是瞬态失败，不调用 `record_method_not_compilable`，也不走"关优化重试"。
+  - **release 实测（bench.Med 长 C2，20 轮 redefine）**：排空 **444–775 ms → p50 6 ms / max 12 ms**，`redefine_ms` **30–49 ms**，20 次取消（phase=idealLoop/iterGVN2），**20/20 轮 bad=0 stale=0**，被取消的 `Med.m0–m3` 在恢复窗口全部重新 level-4 编译。
+  - fastdebug 交叉验证：16 次取消（idealLoop/macroExpand/optimizer/regalloc），drain max 171 ms；C1-only 场景 19 次 C1 取消且之后重新 level-1 编译；P0 全套回归（并发/SafepointALot/嵌套/shutdown）通过。
+
 ## 0. TL;DR
 
 | 问题 | 结论 |
