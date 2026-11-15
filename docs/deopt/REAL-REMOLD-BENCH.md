@@ -126,3 +126,28 @@ cleanup ~0.44 s；`stageB` 约 6.0 s，占批次 ~53%。
 （2M 对象的 DCEVM 堆遍历 + Heap-Inspection Full GC），P0/P1 仍把 `ForceSafepoint`
 从 17 压到 0，P2 在该结构路径按门控回退 enhanced。继续压这个量级的端到端，应优化
 Remold 的 `getInstances`（tag/对象枚举）与 `stageB` 回填，而不是 JVM。
+
+## 8. 再取 Remold 最新 CI（2026-11-15 11:12，含 getInstances 堆遍历优化）
+
+Remold `main` `a0aa7485`，CI run
+[43707796661](https://github.com/I-hope1/Remold/actions/runs/43707796661)，
+`remold-dist/remold-agent.jar` sha256 `5850bd7c…`，包含
+*perf(native): skip second heap walk safepoint for small/medium getInstances*。
+
+| 场景 | 原版 JBR 25.0.4.1 | P0+P1+P2 JBR 25 |
+|---|---|---|
+| 结构性两阶段：total p50 | 251.5 ms | **194.5 ms** |
+| 结构性两阶段：redefine p50 / max | 122 / **517** ms | **99 / 115 ms** |
+| 结构性两阶段：`ForceSafepoint` | 103 | **0** |
+| 结构性两阶段：P1 取消 | 0 | 39 |
+| 纯方法体：redefine p50 / max | — | **18 / 24 ms**（12/12 standard，P2） |
+| 纯方法体：total p50 | — | **51.5 ms**（getInstances 22.4→8.0 ms） |
+| 200 万实例：total p50 | 11034 ms | 11254 ms |
+| 200 万实例：redefine p50 / max | 1296 / 1889 ms | 1347 / 1552 ms |
+| 200 万实例：`ForceSafepoint` | 35 | **0** |
+
+与上一版 CI（`c0a38d64`）相比：纯方法体 total **77.5 → 51.5 ms**（新版把
+small/medium 场景的第二次堆遍历 safepoint 去掉，`getInstances` 22.4→8.0 ms），
+结构性 patched total 228.5→194.5 ms；2M 场景不变（仍是 large heap，两阶段枚举
+≈2.9 s、stageB ≈6.1–6.3 s，JVM redefine ≈1.3 s）。全部 12/12、5/5 hotswap 成功，
+无 fatal/rollback。
