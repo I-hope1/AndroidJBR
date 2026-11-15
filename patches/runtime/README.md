@@ -58,3 +58,24 @@ Measured on the long-C2 bench.Med workload (release, 20 redefines): drains drop
 from 444-775 ms to p50 6 ms / max 12 ms, redefine_ms 30-49 ms, bad=0 stale=0,
 and every cancelled method recompiles at level 4 afterwards. See
 `docs/deopt/P1-CANCELLATION.md`.
+
+## p1-cancellation-standalone.patch (production)
+
+The first P1 version, **standalone**: applies directly on top of
+p0-notify-wait-v4.patch, no instrumentation dependency (verified with
+git apply --check on a clean P0 tree). This is the one to use for
+AndroidJBR / JBR 21 backports.
+
+While an enhanced redefinition window is open, in-flight C1/C2 compilations
+abort at safe boundaries (C2: Optimize/Code_Gen entry, IGVN sampled every 64
+nodes, IdealLoop boundaries + iteration_split, EA/ConnectionGraph, macro
+expansion, Chaitin Split/Select rounds; C1: HIR -> Optimizer -> LIR -> CodeGen
+stage boundaries) using an Atomic load of the existing compilation gate.
+Cancellation is transient: never record_method_not_compilable, never retry with
+disabled optimizations; the policy re-enqueues the method after the window.
+
+## p1-cancellation-with-instrumentation.patch (diagnostic stack only)
+
+Same P1 changes, expressed for the stack
+p0-notify-wait-v4 -> p1-instrumentation -> this patch. Do not apply it directly
+on P0 (it conflicts); use p1-cancellation-standalone.patch there instead.

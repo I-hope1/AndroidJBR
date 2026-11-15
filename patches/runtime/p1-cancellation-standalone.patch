@@ -146,10 +146,10 @@ index dab584ac3..287021c28 100644
  
    static uint desired_max_code_buffer_size() {
 diff --git a/src/hotspot/share/compiler/compileBroker.cpp b/src/hotspot/share/compiler/compileBroker.cpp
-index ec18081d3..468f43b56 100644
+index f7edd90e9..b5ed61b46 100644
 --- a/src/hotspot/share/compiler/compileBroker.cpp
 +++ b/src/hotspot/share/compiler/compileBroker.cpp
-@@ -147,7 +147,7 @@ CompileLog** CompileBroker::_compiler2_logs = nullptr;
+@@ -145,7 +145,7 @@ CompileLog** CompileBroker::_compiler2_logs = nullptr;
  volatile jint CompileBroker::_compilation_id     = 0;
  volatile jint CompileBroker::_osr_compilation_id = 0;
  volatile jint CompileBroker::_native_compilation_id = 0;
@@ -158,7 +158,7 @@ index ec18081d3..468f43b56 100644
  volatile jint CompileBroker::_active_compilations = 0;
  volatile int  CompileBroker::_compilation_stop_count = 0;
  
-@@ -1984,7 +1984,7 @@ void CompileBroker::compiler_thread_loop() {
+@@ -1982,7 +1982,7 @@ void CompileBroker::compiler_thread_loop() {
                ThreadToNativeFromVM ttn(thread);
                MonitorLocker locker(DcevmCompilation_lock, Mutex::_no_safepoint_check_flag);
                // stop all compilations if requested from redefinition
@@ -167,7 +167,7 @@ index ec18081d3..468f43b56 100644
                  locker.wait(20);
                }
                Atomic::add(&_active_compilations, 1);
-@@ -3077,7 +3077,7 @@ void CompileBroker::stopCompilationBeforeEnhancedRedefinition() {
+@@ -3002,7 +3002,7 @@ void CompileBroker::stopCompilationBeforeEnhancedRedefinition() {
    {
      MonitorLocker locker(DcevmCompilation_lock, Mutex::_no_safepoint_check_flag);
      if (_compilation_stop_count++ == 0) {
@@ -176,7 +176,7 @@ index ec18081d3..468f43b56 100644
      }
    }
    JavaThread* self = JavaThread::current();
-@@ -3098,7 +3098,7 @@ void CompileBroker::releaseCompilationAfterEnhancedRedefinition() {
+@@ -3023,7 +3023,7 @@ void CompileBroker::releaseCompilationAfterEnhancedRedefinition() {
    MonitorLocker locker(DcevmCompilation_lock, Mutex::_no_safepoint_check_flag);
    assert(_compilation_stop_count > 0, "unbalanced enhanced redefinition stop/release");
    if (--_compilation_stop_count == 0) {
@@ -186,7 +186,7 @@ index ec18081d3..468f43b56 100644
    }
  }
 diff --git a/src/hotspot/share/compiler/compileBroker.hpp b/src/hotspot/share/compiler/compileBroker.hpp
-index af4bc3eca..36ed568c7 100644
+index 11a81e6f9..d85219e7a 100644
 --- a/src/hotspot/share/compiler/compileBroker.hpp
 +++ b/src/hotspot/share/compiler/compileBroker.hpp
 @@ -201,7 +201,9 @@ class CompileBroker: AllStatic {
@@ -212,9 +212,9 @@ index af4bc3eca..36ed568c7 100644
 +  static bool redefinition_cancel_requested() {
 +    return AllowEnhancedClassRedefinition && Atomic::load(&_compilation_stopped) != 0;
 +  }
-   // P1 instrumentation: log where each in-flight C2 compilation currently is.
-   static void dumpInFlightCompilations();
  };
+ 
+ // RAII guard for the "compilation stopped" window of an enhanced class
 diff --git a/src/hotspot/share/opto/c2compiler.cpp b/src/hotspot/share/opto/c2compiler.cpp
 index 71dfa8cfa..a651456e1 100644
 --- a/src/hotspot/share/opto/c2compiler.cpp
@@ -251,10 +251,10 @@ index 30368d80c..3a4f83d70 100644
        DEBUG_ONLY( dump_for_spill_split_recycle(); )
        if( _trip_cnt > 27 ) {
 diff --git a/src/hotspot/share/opto/compile.cpp b/src/hotspot/share/opto/compile.cpp
-index 14c135a34..a6758d0f9 100644
+index 1c209a646..6cfa5ba88 100644
 --- a/src/hotspot/share/opto/compile.cpp
 +++ b/src/hotspot/share/opto/compile.cpp
-@@ -627,6 +627,27 @@ void Compile::print_ideal_ir(const char* phase_name) {
+@@ -626,6 +626,26 @@ void Compile::print_ideal_ir(const char* phase_name) {
  // the continuation bci for on stack replacement.
  
  
@@ -266,14 +266,13 @@ index 14c135a34..a6758d0f9 100644
 +    // redefinition window.
 +    record_failure(cancelled_by_redefinition());
 +    if (log_is_enabled(Info, redefine, class)) {
++      // NOTE: deliberately does not use the optional phase instrumentation, so
++      // that this cancellation patch can be applied without it.
 +      ResourceMark rm;
-+      CompilerThread* ct = CompilerThread::current();
-+      const char* phase = ct != nullptr ? ct->current_phase_name() : nullptr;
 +      CompileTask* task = env()->task();
-+      log_info(redefine, class)("cancelled in-flight compilation: method='%s' level=%d phase='%s'",
++      log_info(redefine, class)("cancelled in-flight compilation: method='%s' level=%d",
 +                                task != nullptr ? task->method()->name_and_sig_as_C_string() : "?",
-+                                task != nullptr ? task->comp_level() : -1,
-+                                phase != nullptr ? phase : "(between-phases)");
++                                task != nullptr ? task->comp_level() : -1);
 +    }
 +  }
 +  return _is_cancelled;
@@ -282,7 +281,7 @@ index 14c135a34..a6758d0f9 100644
  Compile::Compile(ciEnv* ci_env, ciMethod* target, int osr_bci,
                   Options options, DirectiveSet* directive)
      : Phase(Compiler),
-@@ -2287,6 +2308,11 @@ void Compile::remove_root_to_sfpts_edges(PhaseIterGVN& igvn) {
+@@ -2286,6 +2306,11 @@ void Compile::remove_root_to_sfpts_edges(PhaseIterGVN& igvn) {
  //------------------------------Optimize---------------------------------------
  // Given a graph, optimize it.
  void Compile::Optimize() {
@@ -294,7 +293,7 @@ index 14c135a34..a6758d0f9 100644
    TracePhase tp(_t_optimizer);
  
  #ifndef PRODUCT
-@@ -2990,6 +3016,11 @@ void Compile::optimize_logic_cones(PhaseIterGVN &igvn) {
+@@ -2989,6 +3014,11 @@ void Compile::optimize_logic_cones(PhaseIterGVN &igvn) {
  //------------------------------Code_Gen---------------------------------------
  // Given a graph, generate code for it
  void Compile::Code_Gen() {
@@ -307,18 +306,18 @@ index 14c135a34..a6758d0f9 100644
      return;
    }
 diff --git a/src/hotspot/share/opto/compile.hpp b/src/hotspot/share/opto/compile.hpp
-index ac3069840..6bbfa1fa7 100644
+index 134b930ad..7dacd6c8d 100644
 --- a/src/hotspot/share/opto/compile.hpp
 +++ b/src/hotspot/share/opto/compile.hpp
-@@ -372,6 +372,7 @@ class Compile : public Phase {
+@@ -369,6 +369,7 @@ class Compile : public Phase {
    DirectiveSet*         _directive;             // Compiler directive
    CompileLog*           _log;                   // from CompilerThread
    CHeapStringHolder     _failure_reason;        // for record_failure/failing pattern
 +  bool                  _is_cancelled = false;  // P1: cooperative redefinition cancel
- 
    CompilationFailureInfo* _first_failure_details; // Details for the first failure happening during compilation
    GrowableArray<CallGenerator*> _intrinsics;    // List of intrinsics.
-@@ -818,6 +819,16 @@ class Compile : public Phase {
+   GrowableArray<Node*>  _macro_nodes;           // List of nodes which need to be expanded before matching.
+@@ -814,6 +815,16 @@ class Compile : public Phase {
  
    const CompilationFailureInfo* first_failure_details() const { return _first_failure_details; }
  
