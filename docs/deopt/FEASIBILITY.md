@@ -9,7 +9,10 @@
 ## 进展（2026-11-14）
 
 - **P0 v4 已实测封版并提交**（`patches/p0-notify-wait-v4.patch`，6 文件 +152/−28）：ForceSafepoint 64–374 → 0，并发 enhanced redefine 串行化 + 嵌套重入 fail-fast；fastdebug 全套验证通过（含 `-XX:+SafepointALot`、CFLH 嵌套用例）。
-- **P1 埋点已实现并实测**（`P1-INSTRUMENTATION.md`，补丁 `patches/p1-instrumentation.patch`）：排空等待 >50 ms 时 dump 每个编译线程的当前 C2 阶段（`Compile::TracePhase` 名字 + 阶段内耗时 + 排空总耗时）。合成长 C2 负载（13 KB `bench.Med.m*`，fastdebug）实测排空 124–1281 ms，阶段集中在 **Chaitin/regalloc 管线**（regalloc 总段 630 ms、regAllocSplit 111 ms）与 **optimizer 285 ms** → P1 取消点必须下沉进 Chaitin/IGVN/IdealLoop 内循环，只在 `Optimize()`/`Code_Gen()` 边界检查不够。
+- **P1 埋点已实现并实测（含 release 验证）**（`P1-INSTRUMENTATION.md`，补丁 `patches/p1-instrumentation.patch`）：排空等待 >50 ms 时 dump 每个编译线程的当前阶段（`Compile::TracePhase` 名字 + 阶段内耗时 + 总 `compile_ms` + 排空总耗时）；阶段状态挂在 `CompilerThread` 上（Atomic store/load），不跨线程解引用栈上 `Compile*`。
+  - **release 实测**（本机 aarch64，`bench.Med` 6.5 KB 长 C2 负载）：排空 444–775 ms，C2 `compile_ms` 中位 554 ms；C2 阶段以 **idealLoop（41/97 采样，max 218 ms）**、`optimizer`（max 531 ms）为主，Chaitin 子阶段单体降到 ~30 ms；`CITime` 佐证 idealLoop 3.489 s / 6.593 s、regalloc 1.396 s；C1 平均 1.6 ms/方法。
+  - fastdebug 对照：排空 124–1281 ms，Chaitin/regalloc 被校验放大最明显（regalloc 总段 630 ms）。
+  - 结论：P1 取消点应下沉进 **IdealLoop / IGVN / EA 内层循环 + `Register_Allocate` 轮次边界**，不先碰 `buildIFG()`/`fill_buffer()`；C1 阶段边界 `bailout()` 成本极低可顺手加。
 
 ## 0. TL;DR
 
