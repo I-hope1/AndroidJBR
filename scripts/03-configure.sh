@@ -23,13 +23,24 @@ need_dir "$CUPS_SRC" "run ./scripts/fetch-deps.sh first"
 need_dir "$DUMMY_LIBS" "run ./scripts/02-apply-patches.sh first"
 
 # --- sanity: the whole series must be applied -------------------------------
+# The series is cumulative, so reverse-checking an earlier patch can fail when a
+# later patch rewrote its postimage (e.g. P1 changes the compileBroker.cpp lines
+# P0 added).  Accept that case as long as the files the patch touches differ
+# from the pinned tree; an untouched file still means "series not applied".
 while IFS= read -r line; do
   line=${line%%#*}
   line=$(printf '%s' "$line" | xargs)
   [ -n "$line" ] || continue
-  git -C "$JBR_SRC" apply --reverse --check --whitespace=nowarn \
-    "$PATCH_DIR/$line" 2>/dev/null \
-    || die "patch not applied in $JBR_SRC: $line — run ./scripts/02-apply-patches.sh first"
+  patch="$PATCH_DIR/$line"
+  if git -C "$JBR_SRC" apply --reverse --check --whitespace=nowarn "$patch" 2>/dev/null; then
+    continue
+  fi
+  mapfile -t files < <(awk '/^diff --git / { a = $3; sub(/^a\//, "", a); print a }' "$patch" | sort -u)
+  [ "${#files[@]}" -gt 0 ] \
+    || die "cannot parse touched files of $line — run ./scripts/02-apply-patches.sh first"
+  if git -C "$JBR_SRC" diff --quiet "$JBR_PIN" -- "${files[@]}"; then
+    die "patch not applied in $JBR_SRC: $line — run ./scripts/02-apply-patches.sh first"
+  fi
 done < "$PATCH_SERIES"
 
 extra_cflags="-DLE_STANDALONE -O3 -DANDROID -Wno-error=implicit-function-declaration -Wno-error=int-conversion"
