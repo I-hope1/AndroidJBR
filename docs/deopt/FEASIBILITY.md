@@ -22,6 +22,7 @@
   - 补丁栈已整理：**生产用 `p0-notify-wait-v4` + `p1-cancellation-standalone`**（已用 `git apply --check` 验证在干净 P0 上直接可应用，无 instrumentation 依赖）。
 
 - **P2 方向 A/B（真实 Remold，`-Xlog:redefine+class*=info,gc=info`）**（`P2-FLUSH-AB.md`）：每批次 2 个 enhanced-redefine VM op（各 43–49 ms）+ JVMTI 准备 = 118–125 ms redefine；op 内 `flush_dependent_code` 仅 **0–2 ms**，`cpool` ~9 ms、堆遍历/实例更新 12–13 ms、**Heap Inspection Full GC 18–21 ms（≈40%）**。`-XX:+OptimizeCodeFlush` 按设计把 deopt 集合从 all 变 dependent，但 redefine 不变（118.5→124.5 ms，噪声）；其收益在代码缓存保留：worker 吞吐 mean **+5%**、最差 2 s 窗口 **+13%**。剩余 113 ms 是结构性重定义（字段布局变化→实例尺寸更新+全 GC）的物理成本，继续挖 JVM 的可行点只剩"shape 未变的第二阶段省掉一次 GC"与"仅方法体走标准快路径"。
+- **P2 取证（逐 op flags）**（`P2-STAGE-AB-FLAGS.md`）：上一轮"24/24 都 Full GC"是**负载口径**造成的——合成负载每轮把上一轮字段从源码删掉，而 Remold Stage A 骨架用 **旧∪新字段**，于是 Stage A 并回旧字段、Stage C 再删掉，**每轮两次实例布局变化** → 两次 `flags=12 (ModifyInstances|ModifyInstanceSize)` + 两次 GC。真实"字段只增不减"口径下：**Stage C flags=0、GC 0/12**，批次 redefine p50 **119.5→94 ms**；Stage A 也只在 `size_helper` 真变化时才 GC（padding 内加字段不触发）。剩余 P2 收益点：**flags==0 的 Stage C 改派标准 `VM_RedefineClasses` 快路径**（省新 InstanceKlass 克隆+全堆 walk+全 cpool + 第二次停编译，预计 Stage C 38→10-15 ms）；Stage A 的实例尺寸变化 + Heap Inspection Full GC 是结构性物理下限。
 ## 0. TL;DR
 
 | 问题 | 结论 |

@@ -46,6 +46,7 @@ for i in range(300):
     else:
         stmts.append("        acc = acc * 1664525 + %d + (acc >>> 13);" % (i + r))
 body = "\n".join(stmts)
+fields = "".join('    private String guild%d = "Remold Testers";\n' % i for i in range(r + 1))
 src = """package example;
 
 import remold.annotation.OnReload;
@@ -58,8 +59,7 @@ public class PlayerService {
     private final String name;
     private int score;
     private int level = 1;
-    private String guild%d = "Remold Testers";
-    private static volatile long sink;
+%s    private static volatile long sink;
 
     @RemoldReinit(mode = RemoldReinit.Mode.OVERWRITE)
     private String statusTitle = "Novice Adventurer";
@@ -82,7 +82,7 @@ public class PlayerService {
     @OnReload
     private void onReload() { System.out.println(">>> [HOTSWAP] @OnReload round=%d <<<"); }
 }
-""" % (r, r % 7, body, r)
+""" % (fields, r % 7, body, r)
 open('/tmp/remold-test/work-' + tag + '/PlayerService.java', 'w').write(src)
 PY2
 gen_player 0
