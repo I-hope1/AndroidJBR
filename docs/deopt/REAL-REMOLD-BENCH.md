@@ -102,3 +102,27 @@ p50 329 ms / max 441 ms（结构性）与 max 309 ms（纯方法体），补丁�
 97 ms / 19.5 ms，且 `ForceSafepoint` 147→0、无 >50 ms drain。剩余时间主要是
 Remold 侧 readers/gate/alignDiff/initFix（p50 合计 ~40–60 ms）与结构性 Stage A
 的 6 次 Heap-Inspection Full GC（物理下限），与 P2 v1 封版结论一致。
+
+## 7. 200 万实例压测（2026-11-15 11:10）
+
+同一套 Remold 热更负载，但 `Main` 里常驻 **2,000,000 个 `PlayerService` 实例**
+（`-Xms1g -Xmx3g`，结构性字段累积变更，5 轮稳定批次，`ROUND_SLEEP=20`）：
+
+| 指标 | 原版 JBR 25.0.4.1 | P0+P1+P2 JBR 25 |
+|---|---|---|
+| 批次 total p50 | 11312 ms | 11256 ms |
+| `redefine`（JVM 侧）p50 / min / max | 1460 / 765 / 1614 ms | **1292 / 761 / 1600 ms（−12%）** |
+| `stageB`（Remold 实例回填）p50 | 6178 ms | 6005 ms |
+| `getInstances`（2,000,001 实例）p50 | 2935 ms | 2951 ms |
+| `ForceSafepoint` | 17 | **0** |
+| P1 取消事件 | 0 | 9 |
+| Heap-Inspection Full GC | 3（仅在实例尺寸变化轮） | 3 |
+
+`getInstances` 的 2.9 s 拆项（p50）：iterate ~0.75 s、collect ~0.9 s、fill ~0.83 s、
+cleanup ~0.44 s；`stageB` 约 6.0 s，占批次 ~53%。
+
+**结论**：实例数到百万级后，端到端瓶颈完全转移到 **Remold 的实例枚举/回填**
+（`getInstances`＋`stageB` 约 9 s / 批次，占 ~80%）；JVM 侧 `redefine` 只剩 ~1.3 s
+（2M 对象的 DCEVM 堆遍历 + Heap-Inspection Full GC），P0/P1 仍把 `ForceSafepoint`
+从 17 压到 0，P2 在该结构路径按门控回退 enhanced。继续压这个量级的端到端，应优化
+Remold 的 `getInstances`（tag/对象枚举）与 `stageB` 回填，而不是 JVM。
