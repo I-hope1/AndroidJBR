@@ -30,6 +30,13 @@ series_lines`), `RUNTIME_PATCHES=1` (default) the runtime one. `build-hosted`,
 `build-full` and the `ci` patch-check job all matrix over the variant; the JBR
 21 series has no runtime layer yet, so JBR 21 builds the baseline only.
 
+First dual build: run
+[43703503444](https://github.com/I-hope1/AndroidJBR/actions/runs/43703503444)
+— `build baseline` applied 1 patch (55 files, 1774 insertions) and
+`build runtime` applied 4 patches (75 files, 2301 insertions); both artifacts
+passed the arm64 `libjvm.so` + `release` checks and were uploaded as
+`jre25-jbr-android-14-baseline` / `jre25-jbr-android-14-runtime`.
+
 ## Measured effect (upstream-style JBR 25, Remold example workload)
 
 | metric | before | after |
