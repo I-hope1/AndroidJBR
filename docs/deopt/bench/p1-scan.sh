@@ -9,10 +9,11 @@ JAVA=${1:-/home/ubuntu/jbr25-port/JBR25/build/linux-aarch64-server-fastdebug/ima
 LOG=logs-p1
 mkdir -p "$LOG"
 
-# Long-C2 flags: HugeMethodLimit lets the 13 KB bench.Med.m* methods reach C2;
-# the aggressive thresholds make them recompile continuously, so a redefine
-# usually overlaps a multi-hundred-ms C2 compile (fastdebug).
-LONGC2=(-XX:HugeMethodLimit=65535 -XX:CompileThreshold=100 -XX:Tier4InvocationThreshold=100)
+# Long-C2 flags: bench.Med.m* are ~6.5 KB (below the release HugeMethodLimit of
+# 8000, so this works on both fastdebug and release); the aggressive thresholds
+# make them recompile continuously, so a redefine usually overlaps a
+# multi-hundred-ms C2 compile. fastdebug absolute milliseconds are inflated.
+LONGC2=(-XX:CompileThreshold=100 -XX:Tier4InvocationThreshold=100)
 
 run() { # name dirs rounds interval workers markers
   local name=$1 dirs=$2 rounds=$3 iv=$4 wk=$5 mk=$6

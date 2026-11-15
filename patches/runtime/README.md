@@ -23,12 +23,18 @@ Validation (fastdebug aarch64 build, JBR 25.0.5 + Android port tree):
 ## p1-instrumentation.patch
 
 Diagnostic only (apply on top of p0-notify-wait-v4.patch): while the enhanced
-redefinition drain waits, log the in-flight C2 phase of every compiler thread
-(thread, method, level, OSR bci, innermost `Compile::TracePhase` name, time in
-phase) plus the total drain duration. Enabled with `-Xlog:redefine+class=info`;
-threshold via `-XX:DcevmDrainDumpThreshold` (default 50 ms).
+redefinition drain waits, log the in-flight compilation of every compiler thread
+(thread, method, level, OSR bci, innermost C2 `Compile::TracePhase` name, time in
+phase, total compile_ms) plus the total drain duration. Enabled with
+`-Xlog:redefine+class=info`; threshold via `-XX:DcevmDrainDumpThreshold`
+(default 50 ms). Phase state lives on the CompilerThread (Atomic store/load), so
+there is no cross-thread dereference of the stack-allocated `Compile*`.
 
-Measured on the synthetic long-C2 workload: drains 124-1281 ms (fastdebug), and
-the in-flight time concentrates in the Chaitin/register-allocation pipeline and
-`optimizer`, so P1 cancellation points have to be sunk into those inner loops.
+Measured on the synthetic long-C2 workload (bench.Med, 6.5 KB):
+- release: drains 444-775 ms, C2 compile_ms median 554 ms; phases dominated by
+  `idealLoop` (max 218 ms) and `optimizer` (max 531 ms), Chaitin sub-phases
+  ~30 ms each; C1 averages 1.6 ms/method;
+- fastdebug: drains 124-1281 ms, Chaitin/regalloc sub-phases inflated the most.
+So P1 cancellation points must be sunk into the IdealLoop/IGVN/EA inner loops
+and Register_Allocate round boundaries, not into buildIFG/fill_buffer.
 See `docs/deopt/P1-INSTRUMENTATION.md`.
