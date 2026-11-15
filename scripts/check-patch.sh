@@ -92,15 +92,17 @@ while IFS= read -r f; do
 done < "$required"
 [ "$missing" -eq 0 ] || die "$missing patched path(s) do not exist in the pinned tree — patch/pin mismatch"
 
-# --- dry-run, then apply -----------------------------------------------------
+# --- check and apply one patch at a time -------------------------------------
+# The series is cumulative: later patches are written against the tree produced
+# by the earlier ones (e.g. the P1/P2 runtime patches build on P0), so each
+# patch is checked against the current, already-patched tree instead of the
+# pristine pin.
 for p in "${patch_files[@]}"; do
   name=$(basename "$p")
   info "git apply --check $name"
   git -C "$chk" apply --check --whitespace=nowarn "$p" \
     || die "patch does not apply: $name (patch and JBR pin are out of sync)"
-done
-for p in "${patch_files[@]}"; do
-  git -C "$chk" apply --whitespace=nowarn "$p" || die "apply failed: $(basename "$p")"
+  git -C "$chk" apply --whitespace=nowarn "$p" || die "apply failed: $name"
 done
 
 # Count everything the series changed, including files it created.
